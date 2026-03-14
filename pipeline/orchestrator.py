@@ -28,7 +28,7 @@ from enrichment.enrichment_engine import run_enrichment
 from verification.verification_engine import run_verification
 from scoring.hiring_scorer import calculate_hiring_intensity, assign_hiring_label
 from scoring.priority_matrix import assign_priority, calculate_velocity
-from scoring.notes_generator import generate_notes
+from scoring.notes_generator import generate_notes, generate_outreach_summary
 from export.excel_generator import generate_excel
 from export.delivery_ledger import get_already_delivered_lead_ids, record_delivery
 from core.sse import publish_event
@@ -206,6 +206,15 @@ def _build_proof_summary(
     return f"Hiring proof: {', '.join(role_bits)}. Contact proof: {', '.join(contact_bits)}."
 
 
+def _derive_qa_status(existing_status: str | None, buyer_ready: bool) -> str:
+    """Choose the next QA state while respecting manual agency review where possible."""
+    if existing_status == "rejected":
+        return "rejected"
+    if existing_status == "approved" and buyer_ready:
+        return "approved"
+    return "pending_review" if buyer_ready else "needs_research"
+
+
 def _get_current_lead_row(db, company_id: int) -> LeadRow | None:
     """Return the latest lead row for a company so runs update instead of duplicating."""
     return (
@@ -278,6 +287,12 @@ def _score_all_leads(run_id: int) -> list[dict]:
             contact_quality = _contact_proof_quality(contact)
             buyer_ready = _is_buyer_ready(contact)
             proof_summary = _build_proof_summary(company, contact, postings)
+            outreach_summary = generate_outreach_summary(
+                company_name=company.company_name,
+                top_roles=top_roles,
+                tech_stack=json.loads(company.tech_stack or "[]"),
+                contact_title=contact.title if contact else None,
+            )
 
             # Reuse the latest company lead so the list stays one-row-per-company.
             lead_row = _get_current_lead_row(db, company.id)
@@ -286,6 +301,7 @@ def _score_all_leads(run_id: int) -> list[dict]:
                 db.add(lead_row)
 
             previous_status = lead_row.status
+            previous_qa_status = lead_row.qa_status
             lead_row.contact_id = contact.id if contact else None
             lead_row.hiring_intensity = hiring_score
             lead_row.hiring_label = hiring_label.value
@@ -298,7 +314,9 @@ def _score_all_leads(run_id: int) -> list[dict]:
             lead_row.roles_this_week = role_count
             lead_row.velocity_label = velocity.value
             lead_row.buyer_ready = buyer_ready
+            lead_row.qa_status = _derive_qa_status(previous_qa_status, buyer_ready)
             lead_row.proof_summary = proof_summary
+            lead_row.outreach_summary = outreach_summary
             lead_row.pipeline_run_id = run_id
             lead_row.status = previous_status if previous_status == "delivered" else "new"
             db.flush()
@@ -325,10 +343,12 @@ def _score_all_leads(run_id: int) -> list[dict]:
                 "confidence_tier": confidence_tier_str,
                 "priority_tier": priority.value,
                 "buyer_ready": buyer_ready,
+                "qa_status": lead_row.qa_status,
                 "role_evidence_urls": role_evidence_urls,
                 "contact_source_urls": contact_source_urls,
                 "contact_proof_quality": contact_quality,
                 "proof_summary": proof_summary,
+                "outreach_summary": outreach_summary,
                 "notes": "",
             }
 

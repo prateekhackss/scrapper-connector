@@ -224,7 +224,9 @@ class LeadRow(Base):
     roles_this_week = Column(Integer)
     velocity_label = Column(String)
     buyer_ready = Column(Boolean, default=False)
+    qa_status = Column(String, default="pending_review")
     proof_summary = Column(Text)
+    outreach_summary = Column(Text)
 
     notes = Column(Text)
 
@@ -455,7 +457,9 @@ _SCHEMA_PATCHES: dict[str, dict[str, str]] = {
     },
     "leads": {
         "buyer_ready": "BOOLEAN DEFAULT FALSE",
+        "qa_status": "VARCHAR DEFAULT 'pending_review'",
         "proof_summary": "TEXT",
+        "outreach_summary": "TEXT",
     },
 }
 

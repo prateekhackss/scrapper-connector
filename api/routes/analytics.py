@@ -25,6 +25,9 @@ async def analytics_overview():
         total_leads = db.query(LeadRow).count()
         total_contacts = db.query(ContactRow).filter_by(is_current=True).count()
         verified = db.query(ContactRow).filter_by(is_current=True, is_verified=True).count()
+        buyer_ready = db.query(LeadRow).filter_by(buyer_ready=True).count()
+        approved = db.query(LeadRow).filter_by(qa_status="approved").count()
+        pending_review = db.query(LeadRow).filter_by(qa_status="pending_review").count()
 
         total_cost = db.query(func.sum(APIUsageRow.cost_usd)).scalar() or 0
         today_cost = (
@@ -38,6 +41,9 @@ async def analytics_overview():
             "total_leads": total_leads,
             "total_contacts": total_contacts,
             "verified_contacts": verified,
+            "buyer_ready_leads": buyer_ready,
+            "approved_leads": approved,
+            "pending_review_leads": pending_review,
             "total_cost_usd": round(float(total_cost), 2),
             "today_cost_usd": round(float(today_cost), 2),
         }

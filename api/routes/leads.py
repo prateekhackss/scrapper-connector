@@ -7,13 +7,29 @@ Endpoints for browsing, filtering, and managing leads.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import func
+from pydantic import BaseModel
 from core.database import SessionLocal, LeadRow, CompanyRow, ContactRow, JobPostingRow
 from core.logger import get_logger
 
 logger = get_logger("api.leads")
 router = APIRouter()
+
+
+class LeadUpdateRequest(BaseModel):
+    status: str | None = None
+    notes: str | None = None
+    qa_status: str | None = None
+
+
+def _age_in_days(dt):
+    if not dt:
+        return None
+    now = datetime.now(timezone.utc)
+    current = dt if getattr(dt, "tzinfo", None) else dt.replace(tzinfo=timezone.utc)
+    return max(0, int((now - current).total_seconds() // 86400))
 
 
 @router.get("")
@@ -27,6 +43,7 @@ async def list_leads(
     status: str | None = None,
     search: str | None = None,
     buyer_ready_only: bool = False,
+    qa_status: str | None = None,
 ):
     """List leads with filtering and pagination."""
     db = SessionLocal()
@@ -60,6 +77,8 @@ async def list_leads(
             query = query.filter(CompanyRow.company_name.ilike(f"%{search}%"))
         if buyer_ready_only:
             query = query.filter(LeadRow.buyer_ready == True)
+        if qa_status:
+            query = query.filter(LeadRow.qa_status == qa_status)
 
         total = query.count()
         offset = (page - 1) * per_page
@@ -113,10 +132,15 @@ async def list_leads(
                 "best_email": contact.best_email if contact else None,
                 "linkedin_url": contact.linkedin_url if contact else None,
                 "buyer_ready": lead.buyer_ready,
+                "qa_status": lead.qa_status,
                 "proof_summary": lead.proof_summary,
+                "outreach_summary": lead.outreach_summary,
                 "contact_proof_quality": contact.proof_quality if contact else None,
                 "contact_source_urls": json.loads(contact.source_urls or "[]") if contact else [],
                 "role_evidence_urls": role_evidence_urls,
+                "last_company_seen_at": company.last_seen_at.isoformat() if company.last_seen_at else None,
+                "freshness_days": _age_in_days(company.last_seen_at),
+                "contact_verified_at": contact.verified_at.isoformat() if contact and contact.verified_at else None,
                 "notes": lead.notes,
                 "status": lead.status,
                 "score_breakdown": json.loads(lead.score_breakdown or "{}"),
@@ -212,6 +236,7 @@ async def get_lead(lead_id: int):
                 "confidence": contact.data_confidence,
                 "tier": contact.confidence_tier,
                 "verified": contact.is_verified,
+                "verified_at": contact.verified_at.isoformat() if contact.verified_at else None,
                 "verification": json.loads(contact.verification_data or "{}"),
             } if contact else None,
             "job_postings": [
@@ -236,7 +261,10 @@ async def get_lead(lead_id: int):
                 "top_roles": json.loads(lead.top_roles or "[]"),
                 "breakdown": json.loads(lead.score_breakdown or "{}"),
                 "buyer_ready": lead.buyer_ready,
+                "qa_status": lead.qa_status,
                 "proof_summary": lead.proof_summary,
+                "outreach_summary": lead.outreach_summary,
+                "freshness_days": _age_in_days(company.last_seen_at),
             },
             "notes": lead.notes,
             "status": lead.status,
@@ -246,11 +274,14 @@ async def get_lead(lead_id: int):
 
 
 @router.patch("/{lead_id}")
-async def update_lead(lead_id: int, status: str | None = None, notes: str | None = None):
+async def update_lead(lead_id: int, data: LeadUpdateRequest):
     """Update a lead's status or notes."""
     valid_statuses = {"new", "delivered", "rejected", "archived"}
-    if status and status not in valid_statuses:
+    valid_qa_statuses = {"pending_review", "approved", "rejected", "needs_research"}
+    if data.status and data.status not in valid_statuses:
         raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_statuses}")
+    if data.qa_status and data.qa_status not in valid_qa_statuses:
+        raise HTTPException(status_code=400, detail=f"Invalid qa_status. Must be one of: {valid_qa_statuses}")
 
     db = SessionLocal()
     try:
@@ -258,12 +289,14 @@ async def update_lead(lead_id: int, status: str | None = None, notes: str | None
         if not lead:
             raise HTTPException(status_code=404, detail="Lead not found")
 
-        if status:
-            lead.status = status
-        if notes is not None:
-            lead.notes = notes
+        if data.status:
+            lead.status = data.status
+        if data.notes is not None:
+            lead.notes = data.notes
+        if data.qa_status:
+            lead.qa_status = data.qa_status
 
         db.commit()
-        return {"id": lead.id, "status": lead.status, "notes": lead.notes}
+        return {"id": lead.id, "status": lead.status, "notes": lead.notes, "qa_status": lead.qa_status}
     finally:
         db.close()

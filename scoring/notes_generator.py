@@ -54,3 +54,31 @@ def generate_notes(lead: Lead) -> str:
         parts.append("data unverified — review recommended")
 
     return ". ".join(parts) + "." if parts else "No additional notes."
+
+
+def generate_outreach_summary(
+    company_name: str,
+    top_roles: list[str],
+    tech_stack: list[str] | None = None,
+    contact_title: str | None = None,
+) -> str:
+    """
+    Generate a concise recruiter-facing outreach angle.
+
+    Example:
+    "Reach out to the VP Engineering about 3 active backend/data hires across Python and Postgres."
+    """
+    roles = [role for role in top_roles if role][:2]
+    tech = [item for item in (tech_stack or []) if item][:2]
+
+    if roles and tech:
+        role_part = " and ".join(roles)
+        tech_part = " / ".join(tech)
+        target = contact_title or "engineering leadership"
+        return f"Reach out to {target} at {company_name} about {role_part} hiring across {tech_part}."
+
+    if roles:
+        target = contact_title or "the hiring team"
+        return f"Reach out to {target} at {company_name} about current demand for {', '.join(roles)}."
+
+    return f"Reach out to {company_name} to verify the active hiring team and current engineering priorities."

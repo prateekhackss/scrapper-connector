@@ -75,6 +75,17 @@ function BuyerReadyBadge({ ready }) {
   )
 }
 
+function QAStatusBadge({ status }) {
+  const map = {
+    approved: ['badge-verified', 'QA APPROVED'],
+    pending_review: ['badge-likely', 'PENDING QA'],
+    needs_research: ['badge-uncertain', 'NEEDS RESEARCH'],
+    rejected: ['badge-unverified', 'REJECTED'],
+  }
+  const [cls, label] = map[status] || ['badge-cool', status || 'UNKNOWN']
+  return <span className={`badge ${cls}`}>{label}</span>
+}
+
 function ScoreGauge({ value, color }) {
   const borderColor = value >= 80 ? '#22cc44' : value >= 60 ? '#d4a843' : value >= 40 ? '#ffcc00' : '#ff4444'
   return (
@@ -120,7 +131,8 @@ function DashboardPage() {
         {[
           { label: 'Total Leads', value: stats?.total || 0, icon: <Users size={20} /> },
           { label: 'Companies Tracked', value: overview?.total_companies || 0, icon: <Building2 size={20} /> },
-          { label: 'Verified Contacts', value: overview?.verified_contacts || 0, icon: <CheckCircle size={20} /> },
+          { label: 'Buyer-Ready Leads', value: overview?.buyer_ready_leads || 0, icon: <CheckCircle size={20} /> },
+          { label: 'Pending QA', value: overview?.pending_review_leads || 0, icon: <Eye size={20} /> },
           { label: 'Today\'s Cost', value: `$${overview?.today_cost_usd?.toFixed(2) || '0.00'}`, icon: <BarChart3 size={20} />, gold: true },
         ].map((item, i) => (
           <motion.div
@@ -220,6 +232,7 @@ function LeadsPage() {
   const [search, setSearch] = useState('')
   const [priorityFilter, setPriorityFilter] = useState('')
   const [buyerReadyOnly, setBuyerReadyOnly] = useState(false)
+  const [qaFilter, setQaFilter] = useState('')
   const [loading, setLoading] = useState(true)
   const [selectedLeadId, setSelectedLeadId] = useState(null)
   const [selectedLead, setSelectedLead] = useState(null)
@@ -230,6 +243,7 @@ function LeadsPage() {
     const params = { page, per_page: 25, buyer_ready_only: buyerReadyOnly }
     if (search) params.search = search
     if (priorityFilter) params.priority_tier = priorityFilter
+    if (qaFilter) params.qa_status = qaFilter
     api.getLeads(params).then(data => {
       setLeads(data.leads || [])
       setTotal(data.total || 0)
@@ -249,7 +263,15 @@ function LeadsPage() {
     })
   }
 
-  useEffect(() => { fetchLeads() }, [page, priorityFilter, buyerReadyOnly])
+  const updateLeadReview = async (leadId, nextQaStatus) => {
+    await api.updateLead(leadId, { qa_status: nextQaStatus })
+    if (selectedLeadId === leadId) {
+      loadLeadDetail(leadId)
+    }
+    fetchLeads()
+  }
+
+  useEffect(() => { fetchLeads() }, [page, priorityFilter, buyerReadyOnly, qaFilter])
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
@@ -291,6 +313,24 @@ function LeadsPage() {
             <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>Only buyer-ready</span>
           </div>
         </label>
+        <div className="filter-group">
+          <span className="filter-label">QA</span>
+          <select
+            className="select"
+            value={qaFilter}
+            onChange={e => {
+              setPage(1)
+              setQaFilter(e.target.value)
+            }}
+            style={{ width: 170 }}
+          >
+            <option value="">All</option>
+            <option value="approved">Approved</option>
+            <option value="pending_review">Pending Review</option>
+            <option value="needs_research">Needs Research</option>
+            <option value="rejected">Rejected</option>
+          </select>
+        </div>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'flex-end' }}>
           <button className="btn btn-secondary" onClick={fetchLeads}><RefreshCcw size={14} /> Refresh</button>
         </div>
@@ -313,6 +353,7 @@ function LeadsPage() {
                   <th>Why Now</th>
                   <th>Contact</th>
                   <th>Readiness</th>
+                  <th>QA</th>
                   <th>Confidence</th>
                   <th>Priority</th>
                   <th>Status</th>
@@ -361,7 +402,11 @@ function LeadsPage() {
                       <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 6 }}>
                         {lead.role_evidence_urls?.length || 0} role proofs · {lead.contact_source_urls?.length || 0} contact proofs
                       </div>
+                      <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 6 }}>
+                        Freshness: {lead.freshness_days == null ? 'unknown' : `${lead.freshness_days}d`}
+                      </div>
                     </td>
+                    <td><QAStatusBadge status={lead.qa_status} /></td>
                     <td>
                       <ConfidenceBadge tier={lead.confidence_tier} />
                       <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>{lead.data_confidence}/100</div>
@@ -385,11 +430,19 @@ function LeadsPage() {
               <div style={{ display: 'grid', gap: 18 }}>
                 <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
                   <BuyerReadyBadge ready={selectedLead.scoring?.buyer_ready} />
+                  <QAStatusBadge status={selectedLead.scoring?.qa_status} />
                   <HiringBadge label={selectedLead.scoring?.hiring_label} />
                   <ConfidenceBadge tier={selectedLead.scoring?.confidence_tier} />
                   <PriorityBadge tier={selectedLead.scoring?.priority_tier} />
                 </div>
                 <div style={{ color: 'var(--text-secondary)' }}>{selectedLead.scoring?.proof_summary || selectedLead.notes}</div>
+                <div style={{ color: 'var(--text-secondary)' }}>{selectedLead.scoring?.outreach_summary || 'No outreach angle generated yet.'}</div>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  <button className="btn btn-secondary" onClick={() => updateLeadReview(selectedLead.id, 'approved')}>Approve</button>
+                  <button className="btn btn-secondary" onClick={() => updateLeadReview(selectedLead.id, 'pending_review')}>Needs QA</button>
+                  <button className="btn btn-secondary" onClick={() => updateLeadReview(selectedLead.id, 'needs_research')}>Needs Research</button>
+                  <button className="btn btn-secondary" onClick={() => updateLeadReview(selectedLead.id, 'rejected')}>Reject</button>
+                </div>
                 <div className="grid-2" style={{ gap: 20 }}>
                   <div>
                     <div className="stat-label" style={{ marginBottom: 8 }}>Top Roles</div>
@@ -417,6 +470,9 @@ function LeadsPage() {
                         <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
                           Quality: {selectedLead.contact.proof_quality || 'Unknown'} · Confidence: {selectedLead.contact.confidence || 0}/100
                         </div>
+                        <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
+                          Verified: {selectedLead.contact.verified_at ? new Date(selectedLead.contact.verified_at).toLocaleString() : 'Not yet'}
+                        </div>
                         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                           {selectedLead.contact.email && <a href={`mailto:${selectedLead.contact.email}`}><Mail size={14} style={{ verticalAlign: 'middle' }} /> {selectedLead.contact.email}</a>}
                           {selectedLead.contact.linkedin && <a href={selectedLead.contact.linkedin} target="_blank" rel="noopener noreferrer"><Linkedin size={14} style={{ verticalAlign: 'middle' }} /> LinkedIn</a>}
@@ -433,6 +489,9 @@ function LeadsPage() {
                         </div>
                         <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
                           Found on: {selectedLead.contact.found_on_date || 'Unknown'}{selectedLead.contact.generic_email_only ? ' · generic inbox only' : ''}
+                        </div>
+                        <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+                          Company freshness: {selectedLead.scoring?.freshness_days == null ? 'unknown' : `${selectedLead.scoring.freshness_days} day(s) since last seen`}
                         </div>
                       </div>
                     ) : <div style={{ color: 'var(--text-muted)' }}>No contact attached to this lead yet.</div>}
