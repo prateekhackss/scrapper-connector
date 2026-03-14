@@ -143,11 +143,13 @@ async def collect_from_serpapi(
                         company_domain=domain,
                         headquarters=job.get("location", ""),
                         discovery_sources=["serpapi"],
+                        discovery_source_urls=[job.get("share_link") or job.get("apply_link", {}).get("link") or ""],
                     )
 
                 # Job posting
                 extensions = job.get("detected_extensions", {})
                 posting = JobPosting(
+                    company_domain=domain,
                     job_title=job.get("title", "Unknown"),
                     job_url=job.get("share_link") or job.get("apply_link", {}).get("link"),
                     location=job.get("location", ""),
@@ -157,6 +159,7 @@ async def collect_from_serpapi(
                     source="serpapi",
                     source_id=job.get("job_id"),
                     posted_date=extensions.get("posted_at"),
+                    evidence_urls=[job.get("share_link") or job.get("apply_link", {}).get("link") or ""],
                 )
                 all_postings.append(posting)
 

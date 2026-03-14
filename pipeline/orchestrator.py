@@ -16,7 +16,7 @@ import json
 from datetime import datetime, timezone
 
 from core.database import (
-    SessionLocal, PipelineRunRow, CompanyRow, ContactRow, LeadRow,
+    SessionLocal, PipelineRunRow, CompanyRow, ContactRow, LeadRow, JobPostingRow,
     AgencyRow, NotificationRow, get_setting,
 )
 from core.models import Lead, CompanyBase, ScoreBreakdown, HiringLabel, ConfidenceTier
@@ -32,6 +32,7 @@ from scoring.notes_generator import generate_notes
 from export.excel_generator import generate_excel
 from export.delivery_ledger import get_already_delivered_lead_ids, record_delivery
 from core.sse import publish_event
+from enrichment.fallback_emails import is_generic_role_email
 
 logger = get_logger("pipeline.orchestrator")
 
@@ -89,6 +90,122 @@ def _create_notification(type_: str, title: str, message: str, severity: str = "
         db.close()
 
 
+def _json_list(value: str | None) -> list:
+    """Safely load a JSON list from a DB text column."""
+    if not value:
+        return []
+    try:
+        data = json.loads(value)
+    except Exception:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _unique_urls(*groups: list[str]) -> list[str]:
+    """Return de-duplicated, non-empty URLs while preserving order."""
+    seen: set[str] = set()
+    urls: list[str] = []
+    for group in groups:
+        for url in group:
+            if not isinstance(url, str):
+                continue
+            clean = url.strip()
+            if not clean or clean in seen:
+                continue
+            seen.add(clean)
+            urls.append(clean)
+    return urls
+
+
+def _collect_role_evidence_urls(postings: list[JobPostingRow]) -> list[str]:
+    """Gather proof URLs that show the roles are real and current."""
+    evidence: list[str] = []
+    for posting in postings:
+        if posting.job_url:
+            evidence.append(posting.job_url)
+        evidence.extend(_json_list(posting.evidence_urls))
+    return _unique_urls(evidence)
+
+
+def _contact_proof_quality(contact: ContactRow | None) -> str:
+    """Describe how defensible the saved contact is for buyers."""
+    if not contact:
+        return "no_contact"
+    if contact.proof_quality:
+        return contact.proof_quality
+    if contact.enrichment_source == "fallback" or contact.generic_email_only:
+        return "fallback_only"
+    if contact.full_name and contact.title and contact.linkedin_url and _json_list(contact.source_urls):
+        return "source_backed_named_contact"
+    if contact.full_name and contact.title and contact.linkedin_url:
+        return "named_contact_with_linkedin"
+    if contact.full_name and contact.title:
+        return "named_contact_light_proof"
+    return "weak_contact"
+
+
+def _is_buyer_ready(contact: ContactRow | None) -> bool:
+    """Only deliver contacts that look commercially defensible."""
+    if not contact:
+        return False
+
+    min_confidence = int(get_setting("min_buyer_confidence_for_delivery", "55"))
+    require_named = get_setting("require_named_contact_for_delivery", "true").lower() == "true"
+    require_linkedin = get_setting("require_linkedin_for_delivery", "true").lower() == "true"
+
+    if contact.enrichment_source == "fallback" or contact.generic_email_only:
+        return False
+    if is_generic_role_email(contact.best_email):
+        return False
+    if contact.data_confidence < min_confidence:
+        return False
+    if require_named and not (contact.full_name and contact.title):
+        return False
+    if require_linkedin and not contact.linkedin_url:
+        return False
+
+    proof_signals = sum(
+        1 for value in (
+            bool(_json_list(contact.source_urls)),
+            bool(contact.linkedin_verified),
+            bool(contact.person_verified),
+            bool(contact.title_verified),
+        )
+        if value
+    )
+    return proof_signals >= 2 or (contact.data_confidence >= 70 and proof_signals >= 1)
+
+
+def _build_proof_summary(
+    company: CompanyRow,
+    contact: ContactRow | None,
+    postings: list[JobPostingRow],
+) -> str:
+    """Generate a concise buyer-facing rationale for the lead."""
+    role_urls = _collect_role_evidence_urls(postings)
+    role_bits = [f"{len(postings)} active role(s)"]
+    if role_urls:
+        role_bits.append(f"{len(role_urls)} supporting URL(s)")
+    if company.discovery_source_urls and _json_list(company.discovery_source_urls):
+        role_bits.append(f"{len(_json_list(company.discovery_source_urls))} company discovery source URL(s)")
+
+    if not contact:
+        return f"Hiring proof: {', '.join(role_bits)}. No named contact found yet."
+
+    contact_urls = _json_list(contact.source_urls)
+    contact_bits = [f"contact quality { _contact_proof_quality(contact) }"]
+    if contact.full_name and contact.title:
+        contact_bits.append(f"{contact.full_name} ({contact.title})")
+    if contact_urls:
+        contact_bits.append(f"{len(contact_urls)} contact proof URL(s)")
+    if contact.linkedin_url:
+        contact_bits.append("LinkedIn present")
+    if any((contact.person_verified, contact.title_verified, contact.linkedin_verified)):
+        contact_bits.append("verification signals present")
+
+    return f"Hiring proof: {', '.join(role_bits)}. Contact proof: {', '.join(contact_bits)}."
+
+
 def _score_all_leads(run_id: int) -> list[dict]:
     """Score all companies with contacts and create lead records."""
     db = SessionLocal()
@@ -104,7 +221,6 @@ def _score_all_leads(run_id: int) -> list[dict]:
             )
 
             # Count active job postings
-            from core.database import JobPostingRow
             postings = (
                 db.query(JobPostingRow)
                 .filter_by(company_id=company.id, is_active=True)
@@ -147,6 +263,11 @@ def _score_all_leads(run_id: int) -> list[dict]:
 
             # Top roles
             top_roles = [p.job_title for p in postings[:5]]
+            role_evidence_urls = _collect_role_evidence_urls(postings)
+            contact_source_urls = _json_list(contact.source_urls) if contact else []
+            contact_quality = _contact_proof_quality(contact)
+            buyer_ready = _is_buyer_ready(contact)
+            proof_summary = _build_proof_summary(company, contact, postings)
 
             # Create lead row
             lead_row = LeadRow(
@@ -162,6 +283,8 @@ def _score_all_leads(run_id: int) -> list[dict]:
                 top_roles=json.dumps(top_roles),
                 roles_this_week=role_count,
                 velocity_label=velocity.value,
+                buyer_ready=buyer_ready,
+                proof_summary=proof_summary,
                 pipeline_run_id=run_id,
                 status="new",
             )
@@ -189,6 +312,11 @@ def _score_all_leads(run_id: int) -> list[dict]:
                 "data_confidence": data_confidence,
                 "confidence_tier": confidence_tier_str,
                 "priority_tier": priority.value,
+                "buyer_ready": buyer_ready,
+                "role_evidence_urls": role_evidence_urls,
+                "contact_source_urls": contact_source_urls,
+                "contact_proof_quality": contact_quality,
+                "proof_summary": proof_summary,
                 "notes": "",
             }
 
@@ -314,7 +442,11 @@ async def run_full_pipeline(target_market: str | None = None) -> dict:
                         min_conf = icp.get("min_confidence", 40)
                         filtered = [
                             l for l in new_leads
-                            if l["hiring_intensity"] >= min_hiring and l["data_confidence"] >= min_conf
+                            if (
+                                l["hiring_intensity"] >= min_hiring
+                                and l["data_confidence"] >= min_conf
+                                and l.get("buyer_ready")
+                            )
                         ]
 
                         # Limit to max leads per week

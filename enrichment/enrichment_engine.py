@@ -23,9 +23,22 @@ from core.logger import get_logger
 
 from enrichment.openai_enricher import enrich_company_contact
 from enrichment.email_generator import generate_emails
-from enrichment.fallback_emails import generate_fallback_emails
+from enrichment.fallback_emails import generate_fallback_emails, is_generic_role_email
 
 logger = get_logger("enrichment.engine")
+
+
+def _classify_contact_proof_quality(contact: ContactData) -> str:
+    """Grade how defensible this contact is before verification runs."""
+    if contact.enrichment_source == "fallback" or not contact.found:
+        return "fallback_only"
+    if contact.full_name and contact.title and contact.linkedin_url and contact.source_urls:
+        return "source_backed_named_contact"
+    if contact.full_name and contact.title and contact.linkedin_url:
+        return "named_contact_with_linkedin"
+    if contact.full_name and contact.title:
+        return "named_contact_light_proof"
+    return "weak_contact"
 
 
 def _is_recently_enriched(db: Session, company_id: int, days: int = 7) -> bool:
@@ -53,6 +66,9 @@ def _save_contact(db: Session, company_id: int, contact: ContactData, emails: li
     if not best_email and emails:
         best_email = emails[0].email
 
+    proof_quality = contact.proof_quality or _classify_contact_proof_quality(contact)
+    generic_email_only = is_generic_role_email(best_email) and not bool(contact.full_name and contact.title)
+
     row = ContactRow(
         company_id=company_id,
         full_name=contact.full_name,
@@ -64,6 +80,10 @@ def _save_contact(db: Session, company_id: int, contact: ContactData, emails: li
         best_email=best_email,
         enrichment_source=contact.enrichment_source,
         enrichment_sources=json.dumps(contact.enrichment_sources),
+        source_urls=json.dumps([url for url in contact.source_urls if isinstance(url, str) and url.strip()]),
+        found_on_date=contact.found_on_date,
+        proof_quality=proof_quality,
+        generic_email_only=generic_email_only,
         confidence_notes=contact.confidence_notes,
         is_current=True,
         enriched_at=datetime.now(timezone.utc),
@@ -83,7 +103,6 @@ async def enrich_single_company(company_id: int, company_name: str, company_doma
     db = SessionLocal()
     try:
         # Check cache
-        skip_days = int(get_setting("enrichment_delay_seconds", "7"))
         if _is_recently_enriched(db, company_id, days=7):
             logger.info("enrichment_cached", company=company_domain)
             return None
@@ -97,6 +116,7 @@ async def enrich_single_company(company_id: int, company_name: str, company_doma
         else:
             emails = generate_fallback_emails(company_domain)
             contact.enrichment_source = "fallback"
+            contact.proof_quality = "fallback_only"
 
         # Step 3: Save to DB
         contact_id = _save_contact(db, company_id, contact, emails)

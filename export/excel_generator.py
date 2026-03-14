@@ -54,7 +54,8 @@ _LEAD_COLUMNS = [
     "Company", "Website", "Location", "Industry", "Employees",
     "Open Roles", "Top Roles", "Tech Stack", "Hiring Score",
     "Hiring Label", "Contact Name", "Contact Title", "Best Email",
-    "LinkedIn", "Data Confidence", "Confidence Tier", "Notes",
+    "LinkedIn", "Data Confidence", "Confidence Tier", "Buyer Ready",
+    "Role Evidence", "Contact Evidence", "Contact Quality", "Proof Summary", "Notes",
 ]
 
 
@@ -121,6 +122,11 @@ def _write_lead_row(ws, row_num: int, lead: dict) -> None:
         lead.get("linkedin_url", ""),
         lead.get("data_confidence", 0),
         lead.get("confidence_tier", ""),
+        "YES" if lead.get("buyer_ready") else "NO",
+        "\n".join(lead.get("role_evidence_urls", [])[:5]),
+        "\n".join(lead.get("contact_source_urls", [])[:5]),
+        lead.get("contact_proof_quality", ""),
+        lead.get("proof_summary", ""),
         lead.get("notes", ""),
     ]
 
@@ -138,6 +144,9 @@ def _write_lead_row(ws, row_num: int, lead: dict) -> None:
             _apply_hiring_label_color(cell, str(value))
         if col_idx == 16:  # Confidence Tier
             _apply_confidence_color(cell, str(value))
+        if col_idx == 17 and value == "YES":
+            cell.fill = _VERIFIED_FILL
+            cell.font = Font(color="FFFFFF", bold=True)
 
 
 def _auto_width(ws) -> None:

@@ -112,10 +112,12 @@ async def collect_from_remoteok(max_results: int = 100) -> tuple[list[CompanyBas
                 headquarters="Remote",
                 tech_stack=job.get("tags", []),
                 discovery_sources=["remoteok"],
+                discovery_source_urls=[job.get("url", "")],
             )
 
         # Job posting
         posting = JobPosting(
+            company_domain=domain,
             job_title=job.get("position", "Unknown"),
             job_url=job.get("url"),
             location=job.get("location", "Remote"),
@@ -126,6 +128,7 @@ async def collect_from_remoteok(max_results: int = 100) -> tuple[list[CompanyBas
             source="remoteok",
             source_id=str(job.get("id", "")),
             posted_date=job.get("date"),
+            evidence_urls=[job.get("url", "")],
         )
         all_postings.append(posting)
 

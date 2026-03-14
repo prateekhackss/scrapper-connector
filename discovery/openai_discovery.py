@@ -45,8 +45,16 @@ Return a JSON array of objects with these fields:
 - headquarters (string — city, country)
 - employee_count (string — e.g. "50-100", "500+")
 - tech_stack (array of strings)
-- job_titles (array of strings — current open roles you found)
-- source_urls (array of strings — where you found this information)
+- source_urls (array of strings — direct URLs where you found this information)
+- job_openings (array of objects with:
+  - job_title (string, required)
+  - job_url (string, if available)
+  - location (string)
+  - posted_date (string)
+  - source_urls (array of strings — role-specific proof URLs)
+)
+
+If you cannot produce job_openings, include job_titles as a fallback.
 
 Return ONLY valid JSON. No markdown, no explanation. Just the JSON array."""
 
@@ -156,6 +164,7 @@ async def collect_from_openai(
                 domain = domain.rstrip("/")
 
                 if domain not in companies_map:
+                    source_urls = [url for url in item.get("source_urls", []) if isinstance(url, str) and url.strip()]
                     companies_map[domain] = CompanyBase(
                         company_name=name,
                         company_domain=domain,
@@ -165,17 +174,43 @@ async def collect_from_openai(
                         employee_count=item.get("employee_count"),
                         tech_stack=item.get("tech_stack", []),
                         discovery_sources=["openai"],
+                        discovery_source_urls=source_urls,
                     )
 
-                # Create postings from discovered job titles
-                for title in item.get("job_titles", []):
+                source_urls = companies_map[domain].discovery_source_urls
+
+                # Preferred: role-level openings with proof URLs.
+                openings = item.get("job_openings", [])
+                for opening in openings:
+                    title = str(opening.get("job_title", "")).strip()
+                    if not title:
+                        continue
+
+                    evidence_urls = opening.get("source_urls") or source_urls
                     posting = JobPosting(
+                        company_domain=domain,
                         job_title=title,
-                        location=item.get("headquarters", ""),
+                        job_url=opening.get("job_url"),
+                        location=opening.get("location") or item.get("headquarters", ""),
+                        posted_date=opening.get("posted_date"),
+                        evidence_urls=[url for url in evidence_urls if isinstance(url, str) and url.strip()],
                         source="openai",
                         seniority=_parse_seniority_from_title(title),
                     )
                     all_postings.append(posting)
+
+                # Backward-compatible fallback: title-only openings.
+                if not openings:
+                    for title in item.get("job_titles", []):
+                        posting = JobPosting(
+                            company_domain=domain,
+                            job_title=title,
+                            location=item.get("headquarters", ""),
+                            evidence_urls=source_urls,
+                            source="openai",
+                            seniority=_parse_seniority_from_title(title),
+                        )
+                        all_postings.append(posting)
 
         except Exception as e:
             logger.error("openai_discovery_segment_error", segment=segment, error=str(e))

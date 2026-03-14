@@ -54,6 +54,7 @@ Return ONLY valid JSON with these fields:
   "linkedin_url": "https://linkedin.com/in/...",
   "confidence_notes": "Found on LinkedIn and company About page",
   "enrichment_sources": ["LinkedIn", "Company website"],
+  "source_urls": ["https://linkedin.com/in/...", "https://company.com/team"],
   "found_on_date": "2026-03-14"
 }
 
@@ -126,6 +127,8 @@ async def enrich_company_contact(
             linkedin_url=data.get("linkedin_url"),
             enrichment_source="openai_web_search",
             enrichment_sources=data.get("enrichment_sources", []),
+            source_urls=data.get("source_urls", []),
+            found_on_date=data.get("found_on_date"),
             confidence_notes=data.get("confidence_notes"),
         )
 

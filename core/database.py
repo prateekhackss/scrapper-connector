@@ -27,6 +27,8 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    inspect,
+    text,
 )
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -93,6 +95,7 @@ class CompanyRow(Base):
     first_seen_at = Column(DateTime, default=_utcnow)
     last_seen_at = Column(DateTime, default=_utcnow)
     discovery_sources = Column(Text)    # JSON array
+    discovery_source_urls = Column(Text)  # JSON array
     times_seen = Column(Integer, default=1)
 
     status = Column(String, default="active")
@@ -128,6 +131,7 @@ class JobPostingRow(Base):
 
     source = Column(String, nullable=False)
     source_id = Column(String)
+    evidence_urls = Column(Text)        # JSON array
 
     posted_date = Column(String)
     first_scraped = Column(DateTime, default=_utcnow)
@@ -164,6 +168,10 @@ class ContactRow(Base):
 
     enrichment_source = Column(String)
     enrichment_sources = Column(Text)   # JSON array
+    source_urls = Column(Text)          # JSON array
+    found_on_date = Column(String)
+    proof_quality = Column(String)
+    generic_email_only = Column(Boolean, default=False)
     confidence_notes = Column(Text)
 
     is_verified = Column(Boolean, default=False)
@@ -215,6 +223,8 @@ class LeadRow(Base):
     roles_last_week = Column(Integer)
     roles_this_week = Column(Integer)
     velocity_label = Column(String)
+    buyer_ready = Column(Boolean, default=False)
+    proof_summary = Column(Text)
 
     notes = Column(Text)
 
@@ -423,14 +433,52 @@ _DEFAULT_SETTINGS: list[dict] = [
     {"key": "max_companies_per_run", "value": "200", "description": "Max companies per pipeline run"},
     {"key": "enrichment_delay_seconds", "value": "2", "description": "Delay between enrichment calls"},
     {"key": "verification_enabled", "value": "true", "description": "Run verification stage"},
+    {"key": "min_buyer_confidence_for_delivery", "value": "55", "description": "Minimum confidence for buyer-ready delivery"},
+    {"key": "require_named_contact_for_delivery", "value": "true", "description": "Require a named contact for delivery"},
+    {"key": "require_linkedin_for_delivery", "value": "true", "description": "Require LinkedIn proof for delivery"},
     {"key": "notification_email", "value": "", "description": "Email for alerts"},
     {"key": "data_retention_days", "value": "180", "description": "Days to retain old data"},
 ]
+
+_SCHEMA_PATCHES: dict[str, dict[str, str]] = {
+    "companies": {
+        "discovery_source_urls": "TEXT",
+    },
+    "job_postings": {
+        "evidence_urls": "TEXT",
+    },
+    "contacts": {
+        "source_urls": "TEXT",
+        "found_on_date": "VARCHAR",
+        "proof_quality": "VARCHAR",
+        "generic_email_only": "BOOLEAN DEFAULT FALSE",
+    },
+    "leads": {
+        "buyer_ready": "BOOLEAN DEFAULT FALSE",
+        "proof_summary": "TEXT",
+    },
+}
+
+
+def _apply_schema_patches() -> None:
+    """Add backward-compatible columns needed by newer builds."""
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+
+    with engine.begin() as conn:
+        for table_name, columns in _SCHEMA_PATCHES.items():
+            if table_name not in existing_tables:
+                continue
+            for column_name, ddl in columns.items():
+                conn.execute(
+                    text(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {column_name} {ddl}")
+                )
 
 
 def init_db() -> None:
     """Create all tables and seed default settings. Idempotent."""
     Base.metadata.create_all(bind=engine)
+    _apply_schema_patches()
 
     db = SessionLocal()
     try:

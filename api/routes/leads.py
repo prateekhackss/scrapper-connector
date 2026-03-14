@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from fastapi import APIRouter, HTTPException, Query
-from core.database import SessionLocal, LeadRow, CompanyRow, ContactRow
+from core.database import SessionLocal, LeadRow, CompanyRow, ContactRow, JobPostingRow
 from core.logger import get_logger
 
 logger = get_logger("api.leads")
@@ -58,8 +58,26 @@ async def list_leads(
             .all()
         )
 
+        company_ids = [company.id for _, company, _ in rows]
+        postings_by_company: dict[int, list[JobPostingRow]] = {}
+        if company_ids:
+            postings = (
+                db.query(JobPostingRow)
+                .filter(JobPostingRow.company_id.in_(company_ids), JobPostingRow.is_active == True)
+                .all()
+            )
+            for posting in postings:
+                postings_by_company.setdefault(posting.company_id, []).append(posting)
+
         leads = []
         for lead, company, contact in rows:
+            role_evidence_urls = []
+            seen_urls = set()
+            for posting in postings_by_company.get(company.id, [])[:5]:
+                for url in ([posting.job_url] if posting.job_url else []) + json.loads(posting.evidence_urls or "[]"):
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        role_evidence_urls.append(url)
             leads.append({
                 "id": lead.id,
                 "company_name": company.company_name,
@@ -81,6 +99,11 @@ async def list_leads(
                 "contact_title": contact.title if contact else None,
                 "best_email": contact.best_email if contact else None,
                 "linkedin_url": contact.linkedin_url if contact else None,
+                "buyer_ready": lead.buyer_ready,
+                "proof_summary": lead.proof_summary,
+                "contact_proof_quality": contact.proof_quality if contact else None,
+                "contact_source_urls": json.loads(contact.source_urls or "[]") if contact else [],
+                "role_evidence_urls": role_evidence_urls,
                 "notes": lead.notes,
                 "status": lead.status,
                 "score_breakdown": json.loads(lead.score_breakdown or "{}"),
@@ -145,6 +168,7 @@ async def get_lead(lead_id: int):
 
         company = db.query(CompanyRow).filter_by(id=lead.company_id).first()
         contact = db.query(ContactRow).filter_by(id=lead.contact_id).first() if lead.contact_id else None
+        postings = db.query(JobPostingRow).filter_by(company_id=lead.company_id, is_active=True).all()
 
         return {
             "id": lead.id,
@@ -160,6 +184,7 @@ async def get_lead(lead_id: int):
                 "last_seen": company.last_seen_at.isoformat() if company.last_seen_at else None,
                 "times_seen": company.times_seen,
                 "sources": json.loads(company.discovery_sources or "[]"),
+                "source_urls": json.loads(company.discovery_source_urls or "[]"),
             },
             "contact": {
                 "name": contact.full_name,
@@ -167,11 +192,26 @@ async def get_lead(lead_id: int):
                 "email": contact.best_email,
                 "linkedin": contact.linkedin_url,
                 "emails": json.loads(contact.emails or "[]"),
+                "source_urls": json.loads(contact.source_urls or "[]"),
+                "found_on_date": contact.found_on_date,
+                "proof_quality": contact.proof_quality,
+                "generic_email_only": contact.generic_email_only,
                 "confidence": contact.data_confidence,
                 "tier": contact.confidence_tier,
                 "verified": contact.is_verified,
                 "verification": json.loads(contact.verification_data or "{}"),
             } if contact else None,
+            "job_postings": [
+                {
+                    "title": posting.job_title,
+                    "job_url": posting.job_url,
+                    "location": posting.location,
+                    "posted_date": posting.posted_date,
+                    "source": posting.source,
+                    "evidence_urls": json.loads(posting.evidence_urls or "[]"),
+                }
+                for posting in postings
+            ],
             "scoring": {
                 "hiring_intensity": lead.hiring_intensity,
                 "hiring_label": lead.hiring_label,
@@ -182,6 +222,8 @@ async def get_lead(lead_id: int):
                 "role_count": lead.role_count,
                 "top_roles": json.loads(lead.top_roles or "[]"),
                 "breakdown": json.loads(lead.score_breakdown or "{}"),
+                "buyer_ready": lead.buyer_ready,
+                "proof_summary": lead.proof_summary,
             },
             "notes": lead.notes,
             "status": lead.status,

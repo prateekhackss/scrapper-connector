@@ -49,3 +49,12 @@ def generate_fallback_emails(domain: str) -> list[EmailEntry]:
             results.append(EmailEntry(email=email, confidence=confidence))
 
     return results
+
+
+def is_generic_role_email(email: str | None) -> bool:
+    """Return True when an email is a generic inbox like careers@ or hr@."""
+    if not email or "@" not in email:
+        return False
+
+    local_part = email.strip().lower().split("@", 1)[0]
+    return any(local_part == prefix for prefix, _ in _GENERIC_PREFIXES)

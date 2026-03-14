@@ -118,6 +118,7 @@ class CompanyBase(BaseModel):
     employee_count: Optional[str] = None
     tech_stack: list[str] = []
     discovery_sources: list[str] = []
+    discovery_source_urls: list[str] = []
 
     @field_validator("company_domain")
     @classmethod
@@ -136,6 +137,7 @@ class CompanyBase(BaseModel):
 # ── Job Posting ──────────────────────────────────────────────────
 
 class JobPosting(BaseModel):
+    company_domain: Optional[str] = None
     job_title: str
     job_url: Optional[str] = None
     location: Optional[str] = None
@@ -146,6 +148,7 @@ class JobPosting(BaseModel):
     source: str                           # serpapi | remoteok | hn | wellfound | openai
     source_id: Optional[str] = None
     posted_date: Optional[str] = None
+    evidence_urls: list[str] = []
 
 
 # ── Contact ──────────────────────────────────────────────────────
@@ -161,6 +164,9 @@ class ContactData(BaseModel):
     best_email: Optional[str] = None
     enrichment_source: str = "unknown"
     enrichment_sources: list[str] = []
+    source_urls: list[str] = []
+    found_on_date: Optional[str] = None
+    proof_quality: Optional[str] = None
     confidence_notes: Optional[str] = None
 
 

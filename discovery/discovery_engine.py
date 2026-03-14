@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
@@ -42,6 +43,13 @@ def _upsert_company(db: Session, company: CompanyBase) -> int:
         new_sources = list(set(old_sources + company.discovery_sources))
         existing.discovery_sources = json.dumps(new_sources)
 
+        old_source_urls = json.loads(existing.discovery_source_urls or "[]")
+        merged_source_urls = sorted({
+            url for url in old_source_urls + company.discovery_source_urls
+            if isinstance(url, str) and url.strip()
+        })
+        existing.discovery_source_urls = json.dumps(merged_source_urls)
+
         # Fill in blanks
         if company.industry and not existing.industry:
             existing.industry = company.industry
@@ -68,6 +76,10 @@ def _upsert_company(db: Session, company: CompanyBase) -> int:
             employee_count=company.employee_count,
             tech_stack=json.dumps(company.tech_stack),
             discovery_sources=json.dumps(company.discovery_sources),
+            discovery_source_urls=json.dumps([
+                url for url in company.discovery_source_urls
+                if isinstance(url, str) and url.strip()
+            ]),
             first_seen_at=datetime.now(timezone.utc),
             last_seen_at=datetime.now(timezone.utc),
             times_seen=1,
@@ -88,6 +100,20 @@ def _insert_posting(db: Session, company_id: int, posting: JobPosting) -> None:
         if exists:
             exists.last_scraped = datetime.now(timezone.utc)
             return
+    else:
+        exists = (
+            db.query(JobPostingRow)
+            .filter_by(
+                company_id=company_id,
+                source=posting.source,
+                job_title=posting.job_title,
+                job_url=posting.job_url,
+            )
+            .first()
+        )
+        if exists:
+            exists.last_scraped = datetime.now(timezone.utc)
+            return
 
     row = JobPostingRow(
         company_id=company_id,
@@ -101,8 +127,30 @@ def _insert_posting(db: Session, company_id: int, posting: JobPosting) -> None:
         source=posting.source,
         source_id=posting.source_id,
         posted_date=posting.posted_date,
+        evidence_urls=json.dumps([
+            url for url in posting.evidence_urls
+            if isinstance(url, str) and url.strip()
+        ]),
     )
     db.add(row)
+
+
+def _infer_posting_domain(posting: JobPosting) -> str | None:
+    """Match a posting back to its company domain as reliably as possible."""
+    if posting.company_domain:
+        return normalize_domain(posting.company_domain)
+
+    if posting.job_url:
+        parsed = urlparse(posting.job_url)
+        if parsed.netloc:
+            return normalize_domain(parsed.netloc)
+
+    for url in posting.evidence_urls:
+        parsed = urlparse(url)
+        if parsed.netloc:
+            return normalize_domain(parsed.netloc)
+
+    return None
 
 
 async def run_discovery(
@@ -170,11 +218,10 @@ async def run_discovery(
             domain_to_id[company.company_domain] = company_id
 
         for posting in all_postings:
-            # Find matching company ID (by trying domain variations)
             matched_id = None
-            for domain, cid in domain_to_id.items():
-                matched_id = cid
-                break  # Use first match for now
+            posting_domain = _infer_posting_domain(posting)
+            if posting_domain:
+                matched_id = domain_to_id.get(posting_domain)
 
             if matched_id:
                 _insert_posting(db, matched_id, posting)

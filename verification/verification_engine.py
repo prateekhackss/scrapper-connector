@@ -98,6 +98,11 @@ async def verify_single_contact(contact_id: int) -> int:
         contact.domain_has_mx = combined.domain_has_mx
         contact.data_confidence = confidence
         contact.confidence_tier = tier.value
+        if contact.proof_quality != "fallback_only":
+            if contact.full_name and contact.title and combined.linkedin_url_valid and combined.person_verified:
+                contact.proof_quality = "verified_named_contact"
+            elif contact.full_name and contact.title and combined.linkedin_url_valid:
+                contact.proof_quality = "source_backed_named_contact"
         contact.verified_at = datetime.now(timezone.utc)
 
         db.commit()
