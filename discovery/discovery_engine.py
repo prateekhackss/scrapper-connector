@@ -29,10 +29,27 @@ from discovery.deduplicator import deduplicate_companies, normalize_domain
 
 logger = get_logger("discovery.engine")
 
+_AGGREGATOR_DOMAINS = {"remoteok.com", "wellfound.com", "angel.co", "greenhouse.io", "lever.co"}
+
+
+def _looks_like_aggregator_domain(domain: str | None) -> bool:
+    """Return True when the stored company domain is clearly an aggregator host."""
+    if not domain:
+        return False
+    clean = normalize_domain(domain)
+    return any(clean == agg or clean.endswith(f".{agg}") for agg in _AGGREGATOR_DOMAINS)
+
 
 def _upsert_company(db: Session, company: CompanyBase) -> int:
     """Insert or update a company. Returns the company row ID."""
     existing = db.query(CompanyRow).filter_by(company_domain=company.company_domain).first()
+    if not existing:
+        # Repair old rows created with aggregator domains by matching on company name.
+        name_match = db.query(CompanyRow).filter_by(company_name=company.company_name).first()
+        if name_match and _looks_like_aggregator_domain(name_match.company_domain):
+            name_match.company_domain = company.company_domain
+            name_match.website_url = company.website_url or name_match.website_url
+            existing = name_match
 
     if existing:
         existing.last_seen_at = datetime.now(timezone.utc)

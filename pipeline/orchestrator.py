@@ -206,6 +206,16 @@ def _build_proof_summary(
     return f"Hiring proof: {', '.join(role_bits)}. Contact proof: {', '.join(contact_bits)}."
 
 
+def _get_current_lead_row(db, company_id: int) -> LeadRow | None:
+    """Return the latest lead row for a company so runs update instead of duplicating."""
+    return (
+        db.query(LeadRow)
+        .filter_by(company_id=company_id)
+        .order_by(LeadRow.updated_at.desc(), LeadRow.id.desc())
+        .first()
+    )
+
+
 def _score_all_leads(run_id: int) -> list[dict]:
     """Score all companies with contacts and create lead records."""
     db = SessionLocal()
@@ -269,26 +279,28 @@ def _score_all_leads(run_id: int) -> list[dict]:
             buyer_ready = _is_buyer_ready(contact)
             proof_summary = _build_proof_summary(company, contact, postings)
 
-            # Create lead row
-            lead_row = LeadRow(
-                company_id=company.id,
-                contact_id=contact.id if contact else None,
-                hiring_intensity=hiring_score,
-                hiring_label=hiring_label.value,
-                data_confidence=data_confidence,
-                confidence_tier=confidence_tier_str,
-                priority_tier=priority.value,
-                score_breakdown=json.dumps(breakdown.model_dump()),
-                role_count=role_count,
-                top_roles=json.dumps(top_roles),
-                roles_this_week=role_count,
-                velocity_label=velocity.value,
-                buyer_ready=buyer_ready,
-                proof_summary=proof_summary,
-                pipeline_run_id=run_id,
-                status="new",
-            )
-            db.add(lead_row)
+            # Reuse the latest company lead so the list stays one-row-per-company.
+            lead_row = _get_current_lead_row(db, company.id)
+            if lead_row is None:
+                lead_row = LeadRow(company_id=company.id, status="new")
+                db.add(lead_row)
+
+            previous_status = lead_row.status
+            lead_row.contact_id = contact.id if contact else None
+            lead_row.hiring_intensity = hiring_score
+            lead_row.hiring_label = hiring_label.value
+            lead_row.data_confidence = data_confidence
+            lead_row.confidence_tier = confidence_tier_str
+            lead_row.priority_tier = priority.value
+            lead_row.score_breakdown = json.dumps(breakdown.model_dump())
+            lead_row.role_count = role_count
+            lead_row.top_roles = json.dumps(top_roles)
+            lead_row.roles_this_week = role_count
+            lead_row.velocity_label = velocity.value
+            lead_row.buyer_ready = buyer_ready
+            lead_row.proof_summary = proof_summary
+            lead_row.pipeline_run_id = run_id
+            lead_row.status = previous_status if previous_status == "delivered" else "new"
             db.flush()
 
             # Build export dict

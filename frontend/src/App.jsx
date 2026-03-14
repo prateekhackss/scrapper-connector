@@ -67,6 +67,14 @@ function PriorityBadge({ tier }) {
   return <span className="badge badge-cold">ARCHIVE</span>
 }
 
+function BuyerReadyBadge({ ready }) {
+  return (
+    <span className={`badge ${ready ? 'badge-verified' : 'badge-unverified'}`}>
+      {ready ? 'BUYER READY' : 'NEEDS REVIEW'}
+    </span>
+  )
+}
+
 function ScoreGauge({ value, color }) {
   const borderColor = value >= 80 ? '#22cc44' : value >= 60 ? '#d4a843' : value >= 40 ? '#ffcc00' : '#ff4444'
   return (
@@ -211,11 +219,15 @@ function LeadsPage() {
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [priorityFilter, setPriorityFilter] = useState('')
+  const [buyerReadyOnly, setBuyerReadyOnly] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [selectedLeadId, setSelectedLeadId] = useState(null)
+  const [selectedLead, setSelectedLead] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
 
   const fetchLeads = () => {
     setLoading(true)
-    const params = { page, per_page: 25 }
+    const params = { page, per_page: 25, buyer_ready_only: buyerReadyOnly }
     if (search) params.search = search
     if (priorityFilter) params.priority_tier = priorityFilter
     api.getLeads(params).then(data => {
@@ -225,13 +237,25 @@ function LeadsPage() {
     }).catch(() => setLoading(false))
   }
 
-  useEffect(() => { fetchLeads() }, [page, priorityFilter])
+  const loadLeadDetail = (leadId) => {
+    setSelectedLeadId(leadId)
+    setDetailLoading(true)
+    api.getLead(leadId).then(data => {
+      setSelectedLead(data)
+      setDetailLoading(false)
+    }).catch(() => {
+      setSelectedLead(null)
+      setDetailLoading(false)
+    })
+  }
+
+  useEffect(() => { fetchLeads() }, [page, priorityFilter, buyerReadyOnly])
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <div className="page-header">
         <h1 className="page-title">Leads</h1>
-        <p className="page-subtitle">{total} leads discovered · Sorted by hiring intensity</p>
+        <p className="page-subtitle">{total} company snapshots · Sorted by buyer readiness, then hiring intensity</p>
       </div>
 
       <div className="filters-bar">
@@ -253,6 +277,20 @@ function LeadsPage() {
             <option value="ARCHIVE">Archive</option>
           </select>
         </div>
+        <label className="filter-group" style={{ gap: 8, cursor: 'pointer' }}>
+          <span className="filter-label">Quality</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 6 }}>
+            <input
+              type="checkbox"
+              checked={buyerReadyOnly}
+              onChange={e => {
+                setPage(1)
+                setBuyerReadyOnly(e.target.checked)
+              }}
+            />
+            <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>Only buyer-ready</span>
+          </div>
+        </label>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'flex-end' }}>
           <button className="btn btn-secondary" onClick={fetchLeads}><RefreshCcw size={14} /> Refresh</button>
         </div>
@@ -272,9 +310,9 @@ function LeadsPage() {
               <thead>
                 <tr>
                   <th>Company</th>
-                  <th>Hiring</th>
-                  <th>Roles</th>
+                  <th>Why Now</th>
                   <th>Contact</th>
+                  <th>Readiness</th>
                   <th>Confidence</th>
                   <th>Priority</th>
                   <th>Status</th>
@@ -282,23 +320,126 @@ function LeadsPage() {
               </thead>
               <tbody>
                 {leads.map((lead, i) => (
-                  <motion.tr key={lead.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.03 }}>
+                  <motion.tr
+                    key={lead.id}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: i * 0.03 }}
+                    onClick={() => loadLeadDetail(lead.id)}
+                    style={{ cursor: 'pointer', backgroundColor: selectedLeadId === lead.id ? 'rgba(212,168,67,0.06)' : 'transparent' }}
+                  >
                     <td>
                       <div style={{ fontWeight: 600 }}>{lead.company_name}</div>
                       <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>{lead.company_domain}</div>
+                      {lead.proof_summary && (
+                        <div style={{ color: 'var(--text-secondary)', fontSize: 12, marginTop: 6, maxWidth: 320 }}>
+                          {lead.proof_summary}
+                        </div>
+                      )}
                     </td>
-                    <td><HiringBadge label={lead.hiring_label} /><div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{lead.hiring_intensity}/100</div></td>
-                    <td><span style={{ fontWeight: 600 }}>{lead.role_count}</span> <span style={{ color: 'var(--text-muted)' }}>roles</span></td>
                     <td>
-                      {lead.contact_name ? <><div style={{ fontWeight: 500 }}>{lead.contact_name}</div><div style={{ color: 'var(--text-muted)', fontSize: 12 }}>{lead.contact_title}</div></> : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                      <HiringBadge label={lead.hiring_label} />
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{lead.hiring_intensity}/100</div>
+                      <div style={{ marginTop: 8, fontWeight: 600 }}>{lead.role_count} roles</div>
+                      <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 4 }}>
+                        {(lead.top_roles || []).slice(0, 2).join(' · ') || 'No role titles'}
+                      </div>
                     </td>
-                    <td><ConfidenceBadge tier={lead.confidence_tier} /></td>
+                    <td>
+                      {lead.contact_name ? (
+                        <>
+                          <div style={{ fontWeight: 500 }}>{lead.contact_name}</div>
+                          <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>{lead.contact_title}</div>
+                          <div style={{ color: 'var(--text-secondary)', fontSize: 11, marginTop: 6 }}>
+                            {lead.contact_proof_quality || 'Unclassified contact'}
+                          </div>
+                        </>
+                      ) : <span style={{ color: 'var(--text-muted)' }}>No named contact</span>}
+                    </td>
+                    <td>
+                      <BuyerReadyBadge ready={lead.buyer_ready} />
+                      <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 6 }}>
+                        {lead.role_evidence_urls?.length || 0} role proofs · {lead.contact_source_urls?.length || 0} contact proofs
+                      </div>
+                    </td>
+                    <td>
+                      <ConfidenceBadge tier={lead.confidence_tier} />
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>{lead.data_confidence}/100</div>
+                    </td>
                     <td><PriorityBadge tier={lead.priority_tier} /></td>
                     <td><span className={`badge ${lead.status === 'delivered' ? 'badge-verified' : 'badge-cool'}`}>{lead.status}</span></td>
                   </motion.tr>
                 ))}
               </tbody>
             </table>
+          </div>
+          <div className="card" style={{ marginTop: 20 }}>
+            <div className="section-title"><span className="gold-dot" />Lead Evidence</div>
+            {!selectedLeadId ? (
+              <p style={{ color: 'var(--text-muted)' }}>Select a lead row to inspect proof, roles, and contact detail.</p>
+            ) : detailLoading ? (
+              <div className="loading-container" style={{ minHeight: 120 }}><div className="spinner" /></div>
+            ) : !selectedLead ? (
+              <p style={{ color: 'var(--text-muted)' }}>Could not load lead detail.</p>
+            ) : (
+              <div style={{ display: 'grid', gap: 18 }}>
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <BuyerReadyBadge ready={selectedLead.scoring?.buyer_ready} />
+                  <HiringBadge label={selectedLead.scoring?.hiring_label} />
+                  <ConfidenceBadge tier={selectedLead.scoring?.confidence_tier} />
+                  <PriorityBadge tier={selectedLead.scoring?.priority_tier} />
+                </div>
+                <div style={{ color: 'var(--text-secondary)' }}>{selectedLead.scoring?.proof_summary || selectedLead.notes}</div>
+                <div className="grid-2" style={{ gap: 20 }}>
+                  <div>
+                    <div className="stat-label" style={{ marginBottom: 8 }}>Top Roles</div>
+                    {selectedLead.job_postings?.length ? selectedLead.job_postings.slice(0, 6).map((job, idx) => (
+                      <div key={`${job.title}-${idx}`} style={{ padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
+                        <div style={{ fontWeight: 600 }}>{job.title}</div>
+                        <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>{job.location || 'Unknown location'}{job.posted_date ? ` · ${job.posted_date}` : ''}</div>
+                        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 6 }}>
+                          {job.job_url && <a href={job.job_url} target="_blank" rel="noopener noreferrer">Job URL</a>}
+                          {(job.evidence_urls || []).slice(0, 2).map((url, evidenceIdx) => (
+                            <a key={`${url}-${evidenceIdx}`} href={url} target="_blank" rel="noopener noreferrer">Proof {evidenceIdx + 1}</a>
+                          ))}
+                        </div>
+                      </div>
+                    )) : <div style={{ color: 'var(--text-muted)' }}>No role-level proof yet.</div>}
+                  </div>
+                  <div>
+                    <div className="stat-label" style={{ marginBottom: 8 }}>Contact</div>
+                    {selectedLead.contact ? (
+                      <div style={{ display: 'grid', gap: 10 }}>
+                        <div>
+                          <div style={{ fontWeight: 600 }}>{selectedLead.contact.name || 'Unnamed contact'}</div>
+                          <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>{selectedLead.contact.title || 'No title'}</div>
+                        </div>
+                        <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
+                          Quality: {selectedLead.contact.proof_quality || 'Unknown'} · Confidence: {selectedLead.contact.confidence || 0}/100
+                        </div>
+                        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                          {selectedLead.contact.email && <a href={`mailto:${selectedLead.contact.email}`}><Mail size={14} style={{ verticalAlign: 'middle' }} /> {selectedLead.contact.email}</a>}
+                          {selectedLead.contact.linkedin && <a href={selectedLead.contact.linkedin} target="_blank" rel="noopener noreferrer"><Linkedin size={14} style={{ verticalAlign: 'middle' }} /> LinkedIn</a>}
+                        </div>
+                        <div>
+                          <div className="stat-label" style={{ marginBottom: 6 }}>Contact Proof Links</div>
+                          {(selectedLead.contact.source_urls || []).length ? (
+                            (selectedLead.contact.source_urls || []).map((url, idx) => (
+                              <div key={`${url}-${idx}`} style={{ marginBottom: 4 }}>
+                                <a href={url} target="_blank" rel="noopener noreferrer">{url}</a>
+                              </div>
+                            ))
+                          ) : <div style={{ color: 'var(--text-muted)' }}>No source URLs attached.</div>}
+                        </div>
+                        <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+                          Found on: {selectedLead.contact.found_on_date || 'Unknown'}{selectedLead.contact.generic_email_only ? ' · generic inbox only' : ''}
+                        </div>
+                      </div>
+                    ) : <div style={{ color: 'var(--text-muted)' }}>No contact attached to this lead yet.</div>}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
           <div style={{ display: 'flex', justifyContent: 'center', gap: 12, marginTop: 20 }}>
             <button className="btn btn-ghost" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>← Prev</button>

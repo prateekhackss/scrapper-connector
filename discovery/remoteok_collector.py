@@ -12,7 +12,7 @@ Security:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -24,16 +24,18 @@ logger = get_logger("discovery.remoteok")
 
 REMOTEOK_API_URL = "https://remoteok.com/api"
 REQUEST_DELAY_SECONDS = 5
+_AGGREGATOR_HOSTS = {"remoteok.com", "www.remoteok.com"}
 
 
 def _extract_domain(company: str, url: str | None) -> str:
     """Extract domain from the company URL, or guess from name."""
     if url:
-        clean = url.lower().strip()
-        for prefix in ("https://", "http://", "www."):
-            if clean.startswith(prefix):
-                clean = clean[len(prefix):]
-        return clean.split("/")[0].rstrip("/")
+        parsed = urlparse(url.strip())
+        host = parsed.netloc.lower().strip()
+        if host.startswith("www."):
+            host = host[4:]
+        if host and host not in _AGGREGATOR_HOSTS:
+            return host.rstrip("/")
 
     # Fallback: guess from company name
     clean = company.lower().strip()
@@ -101,7 +103,13 @@ async def collect_from_remoteok(max_results: int = 100) -> tuple[list[CompanyBas
         if not company_name:
             continue
 
-        company_url = job.get("company_logo_url") or job.get("url", "")
+        company_url = (
+            job.get("company_url")
+            or job.get("company_website")
+            or job.get("apply_url")
+            or job.get("apply_url_string")
+            or ""
+        )
         domain = _extract_domain(company_name, company_url)
 
         # Company

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from fastapi import APIRouter, HTTPException, Query
+from sqlalchemy import func
 from core.database import SessionLocal, LeadRow, CompanyRow, ContactRow, JobPostingRow
 from core.logger import get_logger
 
@@ -25,12 +26,20 @@ async def list_leads(
     hiring_label: str | None = None,
     status: str | None = None,
     search: str | None = None,
+    buyer_ready_only: bool = False,
 ):
     """List leads with filtering and pagination."""
     db = SessionLocal()
     try:
+        latest_ids = (
+            db.query(func.max(LeadRow.id).label("lead_id"))
+            .group_by(LeadRow.company_id)
+            .subquery()
+        )
+
         query = (
             db.query(LeadRow, CompanyRow, ContactRow)
+            .join(latest_ids, LeadRow.id == latest_ids.c.lead_id)
             .join(CompanyRow, LeadRow.company_id == CompanyRow.id)
             .outerjoin(ContactRow, LeadRow.contact_id == ContactRow.id)
         )
@@ -45,14 +54,18 @@ async def list_leads(
             query = query.filter(LeadRow.hiring_label == hiring_label)
         if status:
             query = query.filter(LeadRow.status == status)
+        else:
+            query = query.filter(LeadRow.status != "archived")
         if search:
             query = query.filter(CompanyRow.company_name.ilike(f"%{search}%"))
+        if buyer_ready_only:
+            query = query.filter(LeadRow.buyer_ready == True)
 
         total = query.count()
         offset = (page - 1) * per_page
         rows = (
             query
-            .order_by(LeadRow.hiring_intensity.desc())
+            .order_by(LeadRow.buyer_ready.desc(), LeadRow.hiring_intensity.desc(), LeadRow.data_confidence.desc())
             .offset(offset)
             .limit(per_page)
             .all()
