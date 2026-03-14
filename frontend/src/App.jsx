@@ -785,7 +785,7 @@ function PipelinePage() {
           <p className="page-subtitle">Run and monitor the lead generation pipeline</p>
         </div>
         <div style={{ display: 'flex', gap: 12 }}>
-          {status?.running && (
+          {status?.running && status?.supports_background_jobs !== false && (
             <button
               className="btn btn-secondary"
               onClick={stopRun}
@@ -798,11 +798,42 @@ function PipelinePage() {
               {stopping ? <div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> : <><XCircle size={16} /> Stop Pipeline</>}
             </button>
           )}
-          <button className="btn btn-primary" onClick={startRun} disabled={starting || status?.running || stopping}>
-            {starting ? <div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> : <><Play size={16} /> {status?.running ? 'Running...' : 'Start Pipeline'}</>}
+          <button
+            className="btn btn-primary"
+            onClick={startRun}
+            disabled={starting || status?.running || stopping || status?.supports_background_jobs === false}
+          >
+            {starting ? (
+              <div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />
+            ) : (
+              <>
+                <Play size={16} /> {status?.supports_background_jobs === false ? 'Unavailable on Vercel' : status?.running ? 'Running...' : 'Start Pipeline'}
+              </>
+            )}
           </button>
         </div>
       </div>
+
+      {status?.warning && (
+        <div
+          className="card"
+          style={{
+            marginBottom: 20,
+            borderColor: 'rgba(255, 149, 0, 0.35)',
+            background: 'rgba(255, 149, 0, 0.04)',
+          }}
+        >
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+            <AlertCircle size={18} style={{ color: '#ff9500', marginTop: 2, flexShrink: 0 }} />
+            <div>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Pipeline host limitation</div>
+              <div style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                {status.warning}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {status?.running && (
         <motion.div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 20 }}

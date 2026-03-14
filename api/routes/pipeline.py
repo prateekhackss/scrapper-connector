@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from core.config import IS_VERCEL
 from core.database import SessionLocal, PipelineRunRow
 from core.logger import get_logger
 from core.sse import event_generator, publish_event
@@ -23,10 +25,69 @@ router = APIRouter()
 
 _pipeline_running = False
 _pipeline_task: asyncio.Task | None = None
+_VERCEL_STALE_RUN_TIMEOUT = timedelta(minutes=10)
 
 
 class StartPipelineRequest(BaseModel):
     target_market: str | None = None
+
+
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """Normalize timestamps for safe comparisons."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _reconcile_stale_serverless_runs(db) -> None:
+    """
+    Mark hanging `running` rows as failed on Vercel.
+
+    Background tasks created inside a serverless request are not durable. If a
+    row has been left in `running` for several minutes, it is more honest to
+    mark it failed than to show it as actively executing forever.
+    """
+    if not IS_VERCEL:
+        return
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - _VERCEL_STALE_RUN_TIMEOUT
+    stale_runs = (
+        db.query(PipelineRunRow)
+        .filter(PipelineRunRow.status == "running")
+        .all()
+    )
+
+    mutated = False
+    for run in stale_runs:
+        started_at = _as_utc(run.started_at)
+        if started_at is None or started_at > cutoff:
+            continue
+
+        existing_errors = []
+        try:
+            existing_errors = json.loads(run.errors or "[]")
+        except Exception:
+            existing_errors = []
+
+        timeout_message = (
+            "Run was marked failed because Vercel serverless cannot keep long-running "
+            "background pipeline jobs alive. Run the pipeline locally or on a persistent worker."
+        )
+        if timeout_message not in existing_errors:
+            existing_errors.append(timeout_message)
+
+        run.status = "failed"
+        run.completed_at = now
+        run.duration_seconds = max(0.0, (now - started_at).total_seconds())
+        run.errors = json.dumps(existing_errors)
+        run.error_count = len(existing_errors)
+        mutated = True
+
+    if mutated:
+        db.commit()
 
 
 @router.post("/start")
@@ -36,6 +97,16 @@ async def start_pipeline(
 ):
     """Start a full pipeline run in the background."""
     global _pipeline_running, _pipeline_task
+
+    if IS_VERCEL:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Manual pipeline runs are disabled on Vercel serverless because long-running "
+                "background jobs do not complete reliably there. Run the backend locally or "
+                "move it to a persistent worker host like Render, Railway, or Fly.io."
+            ),
+        )
 
     if _pipeline_running:
         raise HTTPException(status_code=409, detail="Pipeline is already running.")
@@ -89,13 +160,30 @@ async def pipeline_status():
     """Get current pipeline status."""
     db = SessionLocal()
     try:
+        _reconcile_stale_serverless_runs(db)
         latest = db.query(PipelineRunRow).order_by(PipelineRunRow.id.desc()).first()
         if not latest:
-            return {"running": _pipeline_running, "can_stop": _pipeline_running and _pipeline_task is not None and not _pipeline_task.done(), "last_run": None}
+            return {
+                "running": _pipeline_running,
+                "can_stop": _pipeline_running and _pipeline_task is not None and not _pipeline_task.done(),
+                "supports_background_jobs": not IS_VERCEL,
+                "deployment_mode": "serverless" if IS_VERCEL else "persistent",
+                "warning": (
+                    "Manual pipeline runs are disabled on Vercel serverless. Use a persistent worker host or run locally."
+                    if IS_VERCEL else None
+                ),
+                "last_run": None,
+            }
 
         return {
             "running": _pipeline_running,
             "can_stop": _pipeline_running and _pipeline_task is not None and not _pipeline_task.done(),
+            "supports_background_jobs": not IS_VERCEL,
+            "deployment_mode": "serverless" if IS_VERCEL else "persistent",
+            "warning": (
+                "Manual pipeline runs are disabled on Vercel serverless. Use a persistent worker host or run locally."
+                if IS_VERCEL else None
+            ),
             "last_run": {
                 "id": latest.id,
                 "status": latest.status,
@@ -122,6 +210,7 @@ async def list_pipeline_runs(limit: int = 20):
     """List recent pipeline runs."""
     db = SessionLocal()
     try:
+        _reconcile_stale_serverless_runs(db)
         runs = (
             db.query(PipelineRunRow)
             .order_by(PipelineRunRow.id.desc())
