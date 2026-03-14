@@ -689,6 +689,7 @@ function PipelinePage() {
   const [runs, setRuns] = useState([])
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState(false)
+  const [stopping, setStopping] = useState(false)
   const [logs, setLogs] = useState([])
   const logEndRef = useRef(null)
 
@@ -719,6 +720,7 @@ function PipelinePage() {
           const message = data.message || '';
           if (
             message.includes('completed in') ||
+            message.includes('Pipeline stopped by user') ||
             message.includes('Pipeline crashed') ||
             message.includes('Pipeline failed to start')
           ) {
@@ -754,6 +756,27 @@ function PipelinePage() {
     setStarting(false)
   }
 
+  const stopRun = async () => {
+    setStopping(true)
+    try {
+      await api.stopPipeline()
+      setLogs(prev => [
+        ...prev,
+        {
+          timestamp: new Date().toISOString(),
+          stage: 'system',
+          message: 'Stop requested. Waiting for the current stage to halt...',
+          level: 'warning',
+        },
+      ])
+      const s = await api.getPipelineStatus()
+      setStatus(s)
+    } catch (e) {
+      alert(e.message)
+    }
+    setStopping(false)
+  }
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -761,9 +784,24 @@ function PipelinePage() {
           <h1 className="page-title">Pipeline</h1>
           <p className="page-subtitle">Run and monitor the lead generation pipeline</p>
         </div>
-        <button className="btn btn-primary" onClick={startRun} disabled={starting || status?.running}>
-          {starting ? <div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> : <><Play size={16} /> {status?.running ? 'Running...' : 'Start Pipeline'}</>}
-        </button>
+        <div style={{ display: 'flex', gap: 12 }}>
+          {status?.running && (
+            <button
+              className="btn btn-secondary"
+              onClick={stopRun}
+              disabled={stopping || !status?.can_stop}
+              style={{
+                borderColor: 'rgba(255, 68, 68, 0.4)',
+                color: stopping ? 'var(--text-muted)' : 'var(--error)',
+              }}
+            >
+              {stopping ? <div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> : <><XCircle size={16} /> Stop Pipeline</>}
+            </button>
+          )}
+          <button className="btn btn-primary" onClick={startRun} disabled={starting || status?.running || stopping}>
+            {starting ? <div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> : <><Play size={16} /> {status?.running ? 'Running...' : 'Start Pipeline'}</>}
+          </button>
+        </div>
       </div>
 
       {status?.running && (
@@ -824,7 +862,19 @@ function PipelinePage() {
                 <tr key={r.id}>
                   <td style={{ fontWeight: 600 }}>#{r.id}</td>
                   <td>{r.run_type}</td>
-                  <td><span className={`badge ${r.status === 'completed' ? 'badge-verified' : r.status === 'running' ? 'badge-cool' : 'badge-unverified'}`}>{r.status}</span></td>
+                  <td>
+                    <span className={`badge ${
+                      r.status === 'completed'
+                        ? 'badge-verified'
+                        : r.status === 'running'
+                          ? 'badge-cool'
+                          : r.status === 'cancelled'
+                            ? 'badge-uncertain'
+                            : 'badge-unverified'
+                    }`}>
+                      {r.status}
+                    </span>
+                  </td>
                   <td>{r.companies_discovered}</td>
                   <td>{r.leads_generated}</td>
                   <td>{r.leads_delivered}</td>

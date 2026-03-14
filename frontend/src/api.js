@@ -28,6 +28,9 @@ export const startPipeline = (market) =>
     body: JSON.stringify(market ? { target_market: market } : {}),
   });
 
+export const stopPipeline = () =>
+  fetchJSON('/pipeline/stop', { method: 'POST' });
+
 export const getPipelineStatus = () => fetchJSON('/pipeline/status');
 export const getPipelineRuns = (limit = 20) => fetchJSON(`/pipeline/runs?limit=${limit}`);
 export const getPipelineStream = () => new EventSource(BASE + '/pipeline/stream');

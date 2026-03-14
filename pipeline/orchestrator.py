@@ -12,6 +12,7 @@ Security:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timezone
 
@@ -557,6 +558,28 @@ async def run_full_pipeline(target_market: str | None = None) -> dict:
             "leads_delivered": delivered_total,
             "errors": errors,
         }
+
+    except asyncio.CancelledError:
+        completed_at = datetime.now(timezone.utc)
+        db = SessionLocal()
+        try:
+            run = db.query(PipelineRunRow).filter_by(id=run_id).first()
+            if run:
+                started_at = _as_utc(run.started_at) if run.started_at else completed_at
+                completed_at_utc = _as_utc(completed_at)
+                run.status = "cancelled"
+                run.completed_at = completed_at_utc
+                run.duration_seconds = max(0.0, (completed_at_utc - started_at).total_seconds())
+                run.errors = json.dumps(["Cancelled by user"])
+                run.error_count = 1
+                db.commit()
+        finally:
+            db.close()
+
+        _create_notification("pipeline_failed", "Pipeline stopped", "Pipeline cancelled by user.", severity="warning")
+        logger.warning("pipeline_cancelled", run_id=run_id)
+        await publish_event("system", "⏹ Pipeline stopped by user.", level="warning")
+        raise
 
     except Exception as e:
         _update_run(run_id, status="failed", errors=json.dumps([str(e)]), error_count=1)

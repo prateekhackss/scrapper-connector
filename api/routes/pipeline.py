@@ -22,6 +22,7 @@ logger = get_logger("api.pipeline")
 router = APIRouter()
 
 _pipeline_running = False
+_pipeline_task: asyncio.Task | None = None
 
 
 class StartPipelineRequest(BaseModel):
@@ -34,7 +35,7 @@ async def start_pipeline(
     target_market: str | None = Query(default=None),
 ):
     """Start a full pipeline run in the background."""
-    global _pipeline_running
+    global _pipeline_running, _pipeline_task
 
     if _pipeline_running:
         raise HTTPException(status_code=409, detail="Pipeline is already running.")
@@ -44,7 +45,7 @@ async def start_pipeline(
     _pipeline_running = True
 
     async def _run():
-        global _pipeline_running
+        global _pipeline_running, _pipeline_task
         try:
             await run_full_pipeline(resolved_market)
         except Exception as exc:
@@ -52,11 +53,25 @@ async def start_pipeline(
             await publish_event("system", f"Pipeline failed to start: {str(exc)}", level="error")
         finally:
             _pipeline_running = False
+            _pipeline_task = None
 
     # Run on the SAME event loop as FastAPI so SSE queues are accessible
-    asyncio.ensure_future(_run())
+    _pipeline_task = asyncio.create_task(_run())
 
     return {"status": "started", "message": "Pipeline started in background."}
+
+
+@router.post("/stop")
+async def stop_pipeline():
+    """Stop the currently running pipeline task."""
+    global _pipeline_task
+
+    if not _pipeline_running or _pipeline_task is None or _pipeline_task.done():
+        raise HTTPException(status_code=409, detail="No pipeline is currently running.")
+
+    _pipeline_task.cancel()
+    await publish_event("system", "Stop requested. Waiting for pipeline to halt...", level="warning")
+    return {"status": "stopping", "message": "Pipeline stop requested."}
 
 
 @router.get("/stream")
@@ -76,10 +91,11 @@ async def pipeline_status():
     try:
         latest = db.query(PipelineRunRow).order_by(PipelineRunRow.id.desc()).first()
         if not latest:
-            return {"running": _pipeline_running, "last_run": None}
+            return {"running": _pipeline_running, "can_stop": _pipeline_running and _pipeline_task is not None and not _pipeline_task.done(), "last_run": None}
 
         return {
             "running": _pipeline_running,
+            "can_stop": _pipeline_running and _pipeline_task is not None and not _pipeline_task.done(),
             "last_run": {
                 "id": latest.id,
                 "status": latest.status,
