@@ -36,13 +36,25 @@ from core.sse import publish_event
 logger = get_logger("pipeline.orchestrator")
 
 
+def _as_utc(dt: datetime) -> datetime:
+    """
+    Normalize datetimes to UTC-aware objects.
+
+    Supabase/Postgres can return tz-aware datetimes while older rows may be
+    naive. This keeps arithmetic safe and consistent.
+    """
+    if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def _create_pipeline_run(run_type: str = "full") -> int:
     """Create a new pipeline_run record. Returns run ID."""
     db = SessionLocal()
     try:
         run = PipelineRunRow(
             run_type=run_type,
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
             status="running",
         )
         db.add(run)
@@ -339,17 +351,21 @@ async def run_full_pipeline(target_market: str | None = None) -> dict:
 
         # ── Finalize ────────────────────────────────────────────
         status = "completed" if not errors else "partial"
-        completed_at = datetime.utcnow()
+        completed_at = datetime.now(timezone.utc)
+        duration_seconds = 0.0
 
         db = SessionLocal()
         try:
             run = db.query(PipelineRunRow).filter_by(id=run_id).first()
             if run:
+                started_at = _as_utc(run.started_at) if run.started_at else completed_at
+                completed_at_utc = _as_utc(completed_at)
                 run.status = status
-                run.completed_at = completed_at
-                run.duration_seconds = (completed_at - run.started_at).total_seconds()
+                run.completed_at = completed_at_utc
+                run.duration_seconds = max(0.0, (completed_at_utc - started_at).total_seconds())
                 run.errors = json.dumps(errors)
                 run.error_count = len(errors)
+                duration_seconds = run.duration_seconds
                 db.commit()
         finally:
             db.close()
@@ -365,7 +381,7 @@ async def run_full_pipeline(target_market: str | None = None) -> dict:
         )
 
         logger.info("pipeline_complete", run_id=run_id, status=status, errors=len(errors))
-        await publish_event("system", f"🎉 Pipeline completed in {run.duration_seconds:.1f}s. Delivered {delivered_total} leads total.", level="success")
+        await publish_event("system", f"🎉 Pipeline completed in {duration_seconds:.1f}s. Delivered {delivered_total} leads total.", level="success")
 
         return {
             "run_id": run_id,
@@ -384,3 +400,4 @@ async def run_full_pipeline(target_market: str | None = None) -> dict:
         logger.critical("pipeline_crashed", run_id=run_id, error=str(e))
         await publish_event("system", f"🚨 Pipeline crashed: {str(e)}", level="error")
         raise PipelineError("orchestrator", str(e))
+

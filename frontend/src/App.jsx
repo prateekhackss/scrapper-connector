@@ -516,7 +516,12 @@ function PipelinePage() {
           const data = JSON.parse(e.data);
           setLogs(prev => [...prev, data]);
           
-          if (data.message && data.message.includes('completed in') || data.message.includes('Pipeline crashed')) {
+          const message = data.message || '';
+          if (
+            message.includes('completed in') ||
+            message.includes('Pipeline crashed') ||
+            message.includes('Pipeline failed to start')
+          ) {
              setTimeout(fetchState, 1500); // refresh full state when completed
           }
         } catch (err) {}

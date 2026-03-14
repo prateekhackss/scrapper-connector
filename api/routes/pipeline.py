@@ -8,14 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from core.database import SessionLocal, PipelineRunRow
 from core.logger import get_logger
-from core.sse import event_generator
+from core.sse import event_generator, publish_event
 from pipeline.orchestrator import run_full_pipeline
 
 logger = get_logger("api.pipeline")
@@ -24,20 +24,32 @@ router = APIRouter()
 _pipeline_running = False
 
 
+class StartPipelineRequest(BaseModel):
+    target_market: str | None = None
+
+
 @router.post("/start")
-async def start_pipeline(background_tasks: BackgroundTasks, target_market: str | None = None):
+async def start_pipeline(
+    payload: StartPipelineRequest | None = None,
+    target_market: str | None = Query(default=None),
+):
     """Start a full pipeline run in the background."""
     global _pipeline_running
 
     if _pipeline_running:
         raise HTTPException(status_code=409, detail="Pipeline is already running.")
 
+    resolved_market = (payload.target_market if payload else None) or target_market
+
     _pipeline_running = True
 
     async def _run():
         global _pipeline_running
         try:
-            await run_full_pipeline(target_market)
+            await run_full_pipeline(resolved_market)
+        except Exception as exc:
+            logger.exception("pipeline_background_task_failed", error=str(exc))
+            await publish_event("system", f"Pipeline failed to start: {str(exc)}", level="error")
         finally:
             _pipeline_running = False
 

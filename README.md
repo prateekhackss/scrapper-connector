@@ -33,6 +33,7 @@ Inside `.env`, configure your API Keys:
 - `OPENAI_API_KEY`
 - `SERPAPI_KEY` *(Optional)*
 - `DATABASE_URL` *(Optional: Uncomment to use Supabase/PostgreSQL. Defaults to local SQLite)*
+  - For Supabase, use the Postgres connection URI (or `SUPABASE_DB_URL`), not the `https://<project>.supabase.co` API URL.
 
 ### 2. Backend Setup
 ```bash

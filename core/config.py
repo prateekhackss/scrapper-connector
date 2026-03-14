@@ -8,6 +8,7 @@ Security:
 """
 
 import os
+import shutil
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -38,7 +39,80 @@ OPENAI_API_KEY: str = get_env("OPENAI_API_KEY")
 SERPAPI_KEY: str = get_env("SERPAPI_KEY")
 
 # ── Database ─────────────────────────────────────────────────────
-DATABASE_URL: str = get_env("DATABASE_URL", f"sqlite:///{DATA_DIR / 'connectoros.db'}")
+def _default_sqlite_path() -> Path:
+    """
+    Resolve a stable default SQLite path.
+
+    On Windows + OneDrive workspaces, SQLite can throw disk I/O errors due to
+    sync/file-lock behavior. In that case, prefer LOCALAPPDATA storage.
+    """
+    default_path = DATA_DIR / "connectoros.db"
+
+    if os.name != "nt":
+        return default_path
+
+    root_str = str(ROOT_DIR).lower()
+    if "onedrive" not in root_str:
+        return default_path
+
+    local_appdata = os.getenv("LOCALAPPDATA")
+    if not local_appdata:
+        return default_path
+
+    fallback_dir = Path(local_appdata) / "ConnectorOSScout" / "data"
+    try:
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return default_path
+
+    fallback_path = fallback_dir / "connectoros.db"
+
+    # One-time best-effort copy from legacy project DB path to keep old data.
+    if default_path.exists() and not fallback_path.exists():
+        try:
+            shutil.copy2(default_path, fallback_path)
+        except Exception:
+            pass
+
+    return fallback_path
+
+
+_default_db_file = _default_sqlite_path().as_posix()
+
+
+def _is_http_url(value: str) -> bool:
+    return value.startswith("http://") or value.startswith("https://")
+
+
+def _resolve_database_url() -> str:
+    """
+    Resolve database URL from env with Supabase-friendly aliases.
+
+    Priority:
+      1) DATABASE_URL
+      2) SUPABASE_DB_URL / SUPABASE_DATABASE_URL
+      3) fallback SQLite
+    """
+    database_url = get_env("DATABASE_URL", "").strip()
+    if database_url:
+        return database_url
+
+    supabase_db_url = get_env("SUPABASE_DB_URL", "").strip() or get_env("SUPABASE_DATABASE_URL", "").strip()
+    if supabase_db_url:
+        return supabase_db_url
+
+    # Common misconfiguration: Supabase REST project URL is not a SQLAlchemy DB URL.
+    supabase_api_url = get_env("SUPABASE_URL", "").strip() or get_env("NEXT_PUBLIC_SUPABASE_URL", "").strip()
+    if supabase_api_url and _is_http_url(supabase_api_url):
+        raise ValueError(
+            "Supabase API URL detected, but a Postgres connection string is required for DATABASE_URL. "
+            "Set DATABASE_URL (or SUPABASE_DB_URL) to your Supabase Postgres URI."
+        )
+
+    return f"sqlite:///{_default_db_file}"
+
+
+DATABASE_URL: str = _resolve_database_url()
 
 # ── Server ───────────────────────────────────────────────────────
 HOST: str = get_env("HOST", "0.0.0.0")

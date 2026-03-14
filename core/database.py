@@ -21,6 +21,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    event,
     Float,
     ForeignKey,
     Index,
@@ -45,12 +46,35 @@ from core.config import DATABASE_URL, DATA_DIR
 # Engine & Session Factory
 # =====================================================================
 
+_is_sqlite = "sqlite" in DATABASE_URL
+
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
+    connect_args={"check_same_thread": False, "timeout": 30} if _is_sqlite else {},
     echo=False,
     pool_pre_ping=True,
 )
+
+
+if _is_sqlite:
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
+        """
+        Reduce lock contention and improve durability for desktop usage.
+        """
+        cursor = dbapi_connection.cursor()
+        for pragma in (
+            "PRAGMA journal_mode=WAL",
+            "PRAGMA synchronous=NORMAL",
+            "PRAGMA busy_timeout=30000",
+        ):
+            try:
+                cursor.execute(pragma)
+            except Exception:
+                # Some filesystems (e.g. cloud-sync/reparse mounts) reject
+                # specific pragmas. Keep the connection usable.
+                continue
+        cursor.close()
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
