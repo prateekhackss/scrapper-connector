@@ -19,7 +19,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from core.config import HOST, PORT, EXPORTS_DIR
+from core.config import HOST, PORT, EXPORTS_DIR, IS_VERCEL
 from core.database import init_db
 from core.logger import setup_logging, get_logger
 from core.sse import set_main_loop
@@ -40,11 +40,15 @@ async def lifespan(app: FastAPI):
     logger.info("database_initialized")
     # Capture the running event loop so SSE can deliver events thread-safely
     set_main_loop(asyncio.get_event_loop())
-    start_scheduler()
-    logger.info("scheduler_started")
+    if not IS_VERCEL:
+        start_scheduler()
+        logger.info("scheduler_started")
+    else:
+        logger.info("scheduler_skipped_serverless")
     yield
     # Shutdown
-    stop_scheduler()
+    if not IS_VERCEL:
+        stop_scheduler()
     logger.info("app_shutdown")
 
 

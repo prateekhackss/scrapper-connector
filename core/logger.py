@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 import structlog
 
-from core.config import LOGS_DIR, LOG_LEVEL
+from core.config import LOGS_DIR, LOG_LEVEL, IS_VERCEL
 
 # ── Sensitive patterns to scrub from log output ──────────────────
 _SCRUB_KEYS = {"api_key", "apikey", "token", "secret", "password", "authorization"}
@@ -42,17 +42,24 @@ def setup_logging() -> None:
     """Configure structlog + stdlib logging once at application startup."""
 
     # stdlib root logger → file handler
-    log_file = _get_log_file()
-    file_handler = logging.FileHandler(str(log_file), encoding="utf-8")
-    file_handler.setLevel(logging.DEBUG)
-
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(getattr(logging, LOG_LEVEL.upper(), logging.INFO))
+    handlers = [console_handler]
+
+    if not IS_VERCEL:
+        try:
+            log_file = _get_log_file()
+            file_handler = logging.FileHandler(str(log_file), encoding="utf-8")
+            file_handler.setLevel(logging.DEBUG)
+            handlers.insert(0, file_handler)
+        except Exception:
+            # Logging should never prevent app startup.
+            pass
 
     logging.basicConfig(
         format="%(message)s",
         level=logging.DEBUG,
-        handlers=[file_handler, console_handler],
+        handlers=handlers,
     )
 
     # structlog pipeline

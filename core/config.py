@@ -19,9 +19,26 @@ load_dotenv(ENV_PATH)
 
 
 # ── Data & Log Directories (auto-created) ────────────────────────
-DATA_DIR = ROOT_DIR / "data"
+IS_VERCEL = os.getenv("VERCEL", "").lower() in {"1", "true"} or bool(os.getenv("VERCEL_ENV"))
+
+
+def _resolve_runtime_base_dir() -> Path:
+    """
+    Resolve writable base directory for runtime artifacts.
+
+    Vercel serverless functions use a read-only project filesystem, so we use
+    /tmp (or TMPDIR/TMP) for mutable files like logs/exports.
+    """
+    if IS_VERCEL:
+        tmp_base = Path(os.getenv("TMPDIR") or os.getenv("TMP") or "/tmp")
+        return tmp_base / "connectoros"
+    return ROOT_DIR
+
+
+RUNTIME_BASE_DIR = _resolve_runtime_base_dir()
+DATA_DIR = RUNTIME_BASE_DIR / "data"
 EXPORTS_DIR = DATA_DIR / "exports"
-LOGS_DIR = ROOT_DIR / "logs"
+LOGS_DIR = RUNTIME_BASE_DIR / "logs"
 
 for _dir in (DATA_DIR, EXPORTS_DIR, LOGS_DIR):
     _dir.mkdir(parents=True, exist_ok=True)
@@ -47,6 +64,9 @@ def _default_sqlite_path() -> Path:
     sync/file-lock behavior. In that case, prefer LOCALAPPDATA storage.
     """
     default_path = DATA_DIR / "connectoros.db"
+
+    if IS_VERCEL:
+        return default_path
 
     if os.name != "nt":
         return default_path
