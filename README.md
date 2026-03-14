@@ -15,7 +15,7 @@
 
 - **Backend**: FastAPI, Python 3.10+, SQLAlchemy (ORMs), `asyncio`, Uvicorn.
 - **Frontend**: React, Vite, TailwindCSS (optional integration), Javascript.
-- **Database**: SQLite (default) / PostgreSQL (Supabase ready).
+- **Database**: PostgreSQL (Supabase).
 - **Integrations**: OpenAI API, SerpAPI.
 
 ## Getting Started
@@ -32,8 +32,9 @@ cp .env.example .env
 Inside `.env`, configure your API Keys:
 - `OPENAI_API_KEY`
 - `SERPAPI_KEY` *(Optional)*
-- `DATABASE_URL` *(Optional: Uncomment to use Supabase/PostgreSQL. Defaults to local SQLite)*
-  - For Supabase, use the Postgres connection URI (or `SUPABASE_DB_URL`), not the `https://<project>.supabase.co` API URL.
+- `DATABASE_URL` *(Required: Supabase Postgres URI, ideally pooler `...pooler.supabase.com:6543`)*  
+  - You can alternatively set `SUPABASE_DB_URL`.
+  - `SUPABASE_URL` (`https://<project>.supabase.co`) is API URL only, not DB URL.
 
 ### 2. Backend Setup
 ```bash
