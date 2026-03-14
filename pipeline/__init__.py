@@ -1,0 +1,1 @@
+# ConnectorOS Scout — Pipeline package

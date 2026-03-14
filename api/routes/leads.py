@@ -1,0 +1,214 @@
+"""
+ConnectorOS Scout — Leads API Routes
+
+Endpoints for browsing, filtering, and managing leads.
+"""
+
+from __future__ import annotations
+
+import json
+from fastapi import APIRouter, HTTPException, Query
+from core.database import SessionLocal, LeadRow, CompanyRow, ContactRow
+from core.logger import get_logger
+
+logger = get_logger("api.leads")
+router = APIRouter()
+
+
+@router.get("")
+async def list_leads(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
+    min_hiring: int = Query(0, ge=0, le=100),
+    min_confidence: int = Query(0, ge=0, le=100),
+    priority_tier: str | None = None,
+    hiring_label: str | None = None,
+    status: str | None = None,
+    search: str | None = None,
+):
+    """List leads with filtering and pagination."""
+    db = SessionLocal()
+    try:
+        query = (
+            db.query(LeadRow, CompanyRow, ContactRow)
+            .join(CompanyRow, LeadRow.company_id == CompanyRow.id)
+            .outerjoin(ContactRow, LeadRow.contact_id == ContactRow.id)
+        )
+
+        if min_hiring > 0:
+            query = query.filter(LeadRow.hiring_intensity >= min_hiring)
+        if min_confidence > 0:
+            query = query.filter(LeadRow.data_confidence >= min_confidence)
+        if priority_tier:
+            query = query.filter(LeadRow.priority_tier == priority_tier)
+        if hiring_label:
+            query = query.filter(LeadRow.hiring_label == hiring_label)
+        if status:
+            query = query.filter(LeadRow.status == status)
+        if search:
+            query = query.filter(CompanyRow.company_name.ilike(f"%{search}%"))
+
+        total = query.count()
+        offset = (page - 1) * per_page
+        rows = (
+            query
+            .order_by(LeadRow.hiring_intensity.desc())
+            .offset(offset)
+            .limit(per_page)
+            .all()
+        )
+
+        leads = []
+        for lead, company, contact in rows:
+            leads.append({
+                "id": lead.id,
+                "company_name": company.company_name,
+                "company_domain": company.company_domain,
+                "website_url": company.website_url,
+                "industry": company.industry,
+                "headquarters": company.headquarters,
+                "employee_count": company.employee_count,
+                "tech_stack": json.loads(company.tech_stack or "[]"),
+                "role_count": lead.role_count,
+                "top_roles": json.loads(lead.top_roles or "[]"),
+                "hiring_intensity": lead.hiring_intensity,
+                "hiring_label": lead.hiring_label,
+                "data_confidence": lead.data_confidence,
+                "confidence_tier": lead.confidence_tier,
+                "priority_tier": lead.priority_tier,
+                "velocity_label": lead.velocity_label,
+                "contact_name": contact.full_name if contact else None,
+                "contact_title": contact.title if contact else None,
+                "best_email": contact.best_email if contact else None,
+                "linkedin_url": contact.linkedin_url if contact else None,
+                "notes": lead.notes,
+                "status": lead.status,
+                "score_breakdown": json.loads(lead.score_breakdown or "{}"),
+                "created_at": lead.created_at.isoformat() if lead.created_at else None,
+            })
+
+        return {
+            "leads": leads,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "total_pages": (total + per_page - 1) // per_page,
+        }
+
+    finally:
+        db.close()
+
+
+@router.get("/stats")
+async def lead_stats():
+    """Get lead statistics for the dashboard."""
+    db = SessionLocal()
+    try:
+        total = db.query(LeadRow).count()
+        by_priority = {}
+        for tier in ("PRIORITY", "REVIEW", "NURTURE", "ARCHIVE"):
+            by_priority[tier] = db.query(LeadRow).filter_by(priority_tier=tier).count()
+
+        by_label = {}
+        for label in ("RED_HOT", "WARM", "COOL", "COLD"):
+            by_label[label] = db.query(LeadRow).filter_by(hiring_label=label).count()
+
+        by_confidence = {}
+        for tier in ("VERIFIED", "LIKELY", "UNCERTAIN", "UNVERIFIED"):
+            by_confidence[tier] = db.query(LeadRow).filter_by(confidence_tier=tier).count()
+
+        from sqlalchemy import func
+        avg_hiring = db.query(func.avg(LeadRow.hiring_intensity)).scalar() or 0
+        avg_conf = db.query(func.avg(LeadRow.data_confidence)).scalar() or 0
+
+        return {
+            "total": total,
+            "by_priority": by_priority,
+            "by_hiring_label": by_label,
+            "by_confidence": by_confidence,
+            "avg_hiring_score": round(float(avg_hiring), 1),
+            "avg_data_confidence": round(float(avg_conf), 1),
+        }
+
+    finally:
+        db.close()
+
+
+@router.get("/{lead_id}")
+async def get_lead(lead_id: int):
+    """Get a single lead with full details."""
+    db = SessionLocal()
+    try:
+        lead = db.query(LeadRow).filter_by(id=lead_id).first()
+        if not lead:
+            raise HTTPException(status_code=404, detail="Lead not found")
+
+        company = db.query(CompanyRow).filter_by(id=lead.company_id).first()
+        contact = db.query(ContactRow).filter_by(id=lead.contact_id).first() if lead.contact_id else None
+
+        return {
+            "id": lead.id,
+            "company": {
+                "name": company.company_name,
+                "domain": company.company_domain,
+                "website": company.website_url,
+                "industry": company.industry,
+                "headquarters": company.headquarters,
+                "employee_count": company.employee_count,
+                "tech_stack": json.loads(company.tech_stack or "[]"),
+                "first_seen": company.first_seen_at.isoformat() if company.first_seen_at else None,
+                "last_seen": company.last_seen_at.isoformat() if company.last_seen_at else None,
+                "times_seen": company.times_seen,
+                "sources": json.loads(company.discovery_sources or "[]"),
+            },
+            "contact": {
+                "name": contact.full_name,
+                "title": contact.title,
+                "email": contact.best_email,
+                "linkedin": contact.linkedin_url,
+                "emails": json.loads(contact.emails or "[]"),
+                "confidence": contact.data_confidence,
+                "tier": contact.confidence_tier,
+                "verified": contact.is_verified,
+                "verification": json.loads(contact.verification_data or "{}"),
+            } if contact else None,
+            "scoring": {
+                "hiring_intensity": lead.hiring_intensity,
+                "hiring_label": lead.hiring_label,
+                "data_confidence": lead.data_confidence,
+                "confidence_tier": lead.confidence_tier,
+                "priority_tier": lead.priority_tier,
+                "velocity_label": lead.velocity_label,
+                "role_count": lead.role_count,
+                "top_roles": json.loads(lead.top_roles or "[]"),
+                "breakdown": json.loads(lead.score_breakdown or "{}"),
+            },
+            "notes": lead.notes,
+            "status": lead.status,
+        }
+    finally:
+        db.close()
+
+
+@router.patch("/{lead_id}")
+async def update_lead(lead_id: int, status: str | None = None, notes: str | None = None):
+    """Update a lead's status or notes."""
+    valid_statuses = {"new", "delivered", "rejected", "archived"}
+    if status and status not in valid_statuses:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_statuses}")
+
+    db = SessionLocal()
+    try:
+        lead = db.query(LeadRow).filter_by(id=lead_id).first()
+        if not lead:
+            raise HTTPException(status_code=404, detail="Lead not found")
+
+        if status:
+            lead.status = status
+        if notes is not None:
+            lead.notes = notes
+
+        db.commit()
+        return {"id": lead.id, "status": lead.status, "notes": lead.notes}
+    finally:
+        db.close()

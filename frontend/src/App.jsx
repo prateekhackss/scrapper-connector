@@ -1,0 +1,934 @@
+import React, { useState, useEffect, useRef } from 'react'
+import { BrowserRouter as Router, Routes, Route, NavLink, useLocation } from 'react-router-dom'
+import { motion, AnimatePresence } from 'framer-motion'
+import {
+  LayoutDashboard, Search, Users, Building2, BarChart3,
+  Bell, Settings, Zap, ChevronRight, Play, Clock, Filter,
+  ArrowUpRight, TrendingUp, TrendingDown, AlertCircle,
+  Globe, Mail, Linkedin, Download, RefreshCcw, CheckCircle,
+  XCircle, Eye, MoreHorizontal
+} from 'lucide-react'
+import {
+  Chart as ChartJS, ArcElement, Tooltip, Legend,
+  CategoryScale, LinearScale, BarElement, PointElement, LineElement, Filler
+} from 'chart.js'
+import { Doughnut, Bar, Line } from 'react-chartjs-2'
+import * as api from './api'
+
+ChartJS.register(
+  ArcElement, Tooltip, Legend,
+  CategoryScale, LinearScale, BarElement,
+  PointElement, LineElement, Filler
+)
+
+// ── Shared Theme for Charts ──────────────────────────────────
+const chartDefaults = {
+  plugins: {
+    legend: { labels: { color: '#a0a0a0', font: { family: 'Inter', size: 12 } } },
+    tooltip: {
+      backgroundColor: '#1e1e1e',
+      titleColor: '#f5f5f5',
+      bodyColor: '#a0a0a0',
+      borderColor: 'rgba(212,168,67,0.25)',
+      borderWidth: 1,
+    },
+  },
+  scales: {
+    x: { ticks: { color: '#666' }, grid: { color: 'rgba(255,255,255,0.04)' } },
+    y: { ticks: { color: '#666' }, grid: { color: 'rgba(255,255,255,0.04)' } },
+  },
+}
+
+// ── Hiring Label Badge ───────────────────────────────────────
+function HiringBadge({ label }) {
+  const cls = {
+    RED_HOT: 'badge-red-hot',
+    WARM: 'badge-warm',
+    COOL: 'badge-cool',
+    COLD: 'badge-cold',
+  }[label] || 'badge-cold'
+  return <span className={`badge ${cls}`}>{label?.replace('_', ' ') || '—'}</span>
+}
+
+function ConfidenceBadge({ tier }) {
+  const cls = {
+    VERIFIED: 'badge-verified',
+    LIKELY: 'badge-likely',
+    UNCERTAIN: 'badge-uncertain',
+    UNVERIFIED: 'badge-unverified',
+  }[tier] || 'badge-unverified'
+  return <span className={`badge ${cls}`}>{tier || '—'}</span>
+}
+
+function PriorityBadge({ tier }) {
+  if (tier === 'PRIORITY') return <span className="badge badge-priority">⭐ PRIORITY</span>
+  if (tier === 'REVIEW') return <span className="badge badge-warm">REVIEW</span>
+  if (tier === 'NURTURE') return <span className="badge badge-cool">NURTURE</span>
+  return <span className="badge badge-cold">ARCHIVE</span>
+}
+
+function ScoreGauge({ value, color }) {
+  const borderColor = value >= 80 ? '#22cc44' : value >= 60 ? '#d4a843' : value >= 40 ? '#ffcc00' : '#ff4444'
+  return (
+    <div className="score-gauge" style={{ borderColor: color || borderColor, color: color || borderColor }}>
+      {value}
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════
+// PAGE: Dashboard
+// ══════════════════════════════════════════════════════════════
+function DashboardPage() {
+  const [stats, setStats] = useState(null)
+  const [overview, setOverview] = useState(null)
+  const [pipelineStatus, setPipelineStatus] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    Promise.all([
+      api.getLeadStats().catch(() => null),
+      api.getOverview().catch(() => null),
+      api.getPipelineStatus().catch(() => null),
+    ]).then(([s, o, p]) => {
+      setStats(s)
+      setOverview(o)
+      setPipelineStatus(p)
+      setLoading(false)
+    })
+  }, [])
+
+  if (loading) return <div className="loading-container"><div className="spinner" />Loading dashboard...</div>
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }}>
+      <div className="page-header">
+        <h1 className="page-title">Dashboard</h1>
+        <p className="page-subtitle">Real-time overview of your lead generation pipeline</p>
+      </div>
+
+      {/* KPI Cards */}
+      <div className="stats-grid">
+        {[
+          { label: 'Total Leads', value: stats?.total || 0, icon: <Users size={20} /> },
+          { label: 'Companies Tracked', value: overview?.total_companies || 0, icon: <Building2 size={20} /> },
+          { label: 'Verified Contacts', value: overview?.verified_contacts || 0, icon: <CheckCircle size={20} /> },
+          { label: 'Today\'s Cost', value: `$${overview?.today_cost_usd?.toFixed(2) || '0.00'}`, icon: <BarChart3 size={20} />, gold: true },
+        ].map((item, i) => (
+          <motion.div
+            key={item.label}
+            className="stat-card"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: i * 0.1 }}
+          >
+            <div className={`stat-value ${item.gold ? 'gold' : ''}`}>{item.value}</div>
+            <div className="stat-label">{item.label}</div>
+            <div className="stat-icon">{item.icon}</div>
+          </motion.div>
+        ))}
+      </div>
+
+      <div className="grid-2">
+        {/* Priority Distribution */}
+        <div className="chart-container">
+          <div className="chart-title">Lead Priority Distribution</div>
+          {stats?.by_priority && (
+            <Doughnut
+              data={{
+                labels: ['Priority', 'Review', 'Nurture', 'Archive'],
+                datasets: [{
+                  data: [
+                    stats.by_priority.PRIORITY || 0,
+                    stats.by_priority.REVIEW || 0,
+                    stats.by_priority.NURTURE || 0,
+                    stats.by_priority.ARCHIVE || 0,
+                  ],
+                  backgroundColor: ['#d4a843', '#ff9500', '#4488ff', '#444'],
+                  borderWidth: 0,
+                }],
+              }}
+              options={{
+                ...chartDefaults,
+                cutout: '65%',
+                plugins: {
+                  ...chartDefaults.plugins,
+                  legend: { position: 'bottom', labels: { color: '#a0a0a0', padding: 16, usePointStyle: true } },
+                },
+              }}
+            />
+          )}
+        </div>
+
+        {/* Hiring Label Distribution */}
+        <div className="chart-container">
+          <div className="chart-title">Hiring Intensity Breakdown</div>
+          {stats?.by_hiring_label && (
+            <Bar
+              data={{
+                labels: ['Red Hot', 'Warm', 'Cool', 'Cold'],
+                datasets: [{
+                  data: [
+                    stats.by_hiring_label.RED_HOT || 0,
+                    stats.by_hiring_label.WARM || 0,
+                    stats.by_hiring_label.COOL || 0,
+                    stats.by_hiring_label.COLD || 0,
+                  ],
+                  backgroundColor: ['#ff4444', '#ff9500', '#4488ff', '#666'],
+                  borderRadius: 6,
+                  barPercentage: 0.6,
+                }],
+              }}
+              options={{ ...chartDefaults, plugins: { ...chartDefaults.plugins, legend: { display: false } } }}
+            />
+          )}
+        </div>
+      </div>
+
+      {/* Pipeline Status */}
+      {pipelineStatus?.last_run && (
+        <div className="card" style={{ marginBottom: 28 }}>
+          <div className="section-title"><span className="gold-dot" />Last Pipeline Run</div>
+          <div style={{ display: 'flex', gap: 40, flexWrap: 'wrap' }}>
+            <div><div className="stat-label">Status</div><div style={{ color: pipelineStatus.last_run.status === 'completed' ? '#22cc44' : '#ffcc00', fontWeight: 600, textTransform: 'uppercase' }}>{pipelineStatus.last_run.status}</div></div>
+            <div><div className="stat-label">Discovered</div><div style={{ fontSize: 20, fontWeight: 700 }}>{pipelineStatus.last_run.companies_discovered}</div></div>
+            <div><div className="stat-label">Leads</div><div style={{ fontSize: 20, fontWeight: 700 }}>{pipelineStatus.last_run.leads_generated}</div></div>
+            <div><div className="stat-label">Delivered</div><div style={{ fontSize: 20, fontWeight: 700 }}>{pipelineStatus.last_run.leads_delivered}</div></div>
+            <div><div className="stat-label">Duration</div><div style={{ fontSize: 20, fontWeight: 700 }}>{pipelineStatus.last_run.duration_seconds ? `${Math.round(pipelineStatus.last_run.duration_seconds)}s` : '—'}</div></div>
+          </div>
+        </div>
+      )}
+    </motion.div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════
+// PAGE: Leads
+// ══════════════════════════════════════════════════════════════
+function LeadsPage() {
+  const [leads, setLeads] = useState([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [search, setSearch] = useState('')
+  const [priorityFilter, setPriorityFilter] = useState('')
+  const [loading, setLoading] = useState(true)
+
+  const fetchLeads = () => {
+    setLoading(true)
+    const params = { page, per_page: 25 }
+    if (search) params.search = search
+    if (priorityFilter) params.priority_tier = priorityFilter
+    api.getLeads(params).then(data => {
+      setLeads(data.leads || [])
+      setTotal(data.total || 0)
+      setLoading(false)
+    }).catch(() => setLoading(false))
+  }
+
+  useEffect(() => { fetchLeads() }, [page, priorityFilter])
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <div className="page-header">
+        <h1 className="page-title">Leads</h1>
+        <p className="page-subtitle">{total} leads discovered · Sorted by hiring intensity</p>
+      </div>
+
+      <div className="filters-bar">
+        <div className="filter-group">
+          <span className="filter-label">Search</span>
+          <input className="input" placeholder="Company name..." value={search}
+            onChange={e => setSearch(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && fetchLeads()}
+            style={{ width: 200 }}
+          />
+        </div>
+        <div className="filter-group">
+          <span className="filter-label">Priority</span>
+          <select className="select" value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)} style={{ width: 140 }}>
+            <option value="">All</option>
+            <option value="PRIORITY">⭐ Priority</option>
+            <option value="REVIEW">Review</option>
+            <option value="NURTURE">Nurture</option>
+            <option value="ARCHIVE">Archive</option>
+          </select>
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'flex-end' }}>
+          <button className="btn btn-secondary" onClick={fetchLeads}><RefreshCcw size={14} /> Refresh</button>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="loading-container"><div className="spinner" /></div>
+      ) : leads.length === 0 ? (
+        <div className="empty-state">
+          <Users className="empty-state-icon" />
+          <p>No leads yet. Run the pipeline to discover companies.</p>
+        </div>
+      ) : (
+        <>
+          <div className="card" style={{ padding: 0, overflow: 'auto' }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Company</th>
+                  <th>Hiring</th>
+                  <th>Roles</th>
+                  <th>Contact</th>
+                  <th>Confidence</th>
+                  <th>Priority</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {leads.map((lead, i) => (
+                  <motion.tr key={lead.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.03 }}>
+                    <td>
+                      <div style={{ fontWeight: 600 }}>{lead.company_name}</div>
+                      <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>{lead.company_domain}</div>
+                    </td>
+                    <td><HiringBadge label={lead.hiring_label} /><div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{lead.hiring_intensity}/100</div></td>
+                    <td><span style={{ fontWeight: 600 }}>{lead.role_count}</span> <span style={{ color: 'var(--text-muted)' }}>roles</span></td>
+                    <td>
+                      {lead.contact_name ? <><div style={{ fontWeight: 500 }}>{lead.contact_name}</div><div style={{ color: 'var(--text-muted)', fontSize: 12 }}>{lead.contact_title}</div></> : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                    </td>
+                    <td><ConfidenceBadge tier={lead.confidence_tier} /></td>
+                    <td><PriorityBadge tier={lead.priority_tier} /></td>
+                    <td><span className={`badge ${lead.status === 'delivered' ? 'badge-verified' : 'badge-cool'}`}>{lead.status}</span></td>
+                  </motion.tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: 12, marginTop: 20 }}>
+            <button className="btn btn-ghost" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>← Prev</button>
+            <span style={{ color: 'var(--text-muted)', alignSelf: 'center' }}>Page {page}</span>
+            <button className="btn btn-ghost" onClick={() => setPage(p => p + 1)}>Next →</button>
+          </div>
+        </>
+      )}
+    </motion.div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════
+// PAGE: Search
+// ══════════════════════════════════════════════════════════════
+function SearchPage() {
+  const [query, setQuery] = useState('')
+  const [type, setType] = useState('company')
+  const [result, setResult] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  const onSearch = async () => {
+    if (!query.trim()) return
+    setLoading(true)
+    setResult(null)
+    try {
+      let data
+      if (type === 'company') data = await api.searchCompany(query)
+      else if (type === 'contact') data = await api.searchContact(query)
+      else data = await api.searchMarket(query)
+      setResult(data)
+    } catch (e) {
+      setResult({ error: e.message })
+    }
+    setLoading(false)
+  }
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <div className="page-header">
+        <h1 className="page-title">Search</h1>
+        <p className="page-subtitle">Manually search for companies, contacts, or scan markets</p>
+      </div>
+
+      <div className="card" style={{ marginBottom: 28 }}>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <select className="select" value={type} onChange={e => setType(e.target.value)} style={{ width: 150 }}>
+            <option value="company">Company Lookup</option>
+            <option value="contact">Contact Finder</option>
+            <option value="market">Market Scan</option>
+          </select>
+          <input className="input" placeholder={type === 'market' ? 'e.g. AI/ML startups in NYC' : 'e.g. stripe.com'}
+            value={query} onChange={e => setQuery(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && onSearch()}
+            style={{ flex: 1, minWidth: 250 }}
+          />
+          <button className="btn btn-primary" onClick={onSearch} disabled={loading}>
+            {loading ? <div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> : <><Search size={16} /> Search</>}
+          </button>
+        </div>
+      </div>
+
+      {result && !result.error && (
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="card">
+          {result.contact && (
+            <div>
+              <div className="section-title"><span className="gold-dot" />Contact Found</div>
+              {result.contact.found ? (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  <div><span className="stat-label">Name</span><div style={{ fontWeight: 600 }}>{result.contact.full_name}</div></div>
+                  <div><span className="stat-label">Title</span><div>{result.contact.title}</div></div>
+                  <div><span className="stat-label">LinkedIn</span><div>{result.contact.linkedin_url ? <a href={result.contact.linkedin_url} target="_blank" rel="noopener">{result.contact.linkedin_url}</a> : '—'}</div></div>
+                  <div><span className="stat-label">Sources</span><div>{result.contact.enrichment_sources?.join(', ') || '—'}</div></div>
+                </div>
+              ) : <p style={{ color: 'var(--text-muted)' }}>No contact found.</p>}
+            </div>
+          )}
+          {result.emails?.length > 0 && (
+            <div style={{ marginTop: 20 }}>
+              <div className="section-title"><span className="gold-dot" />Email Patterns</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {result.emails.map((e, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                    <Mail size={14} style={{ color: 'var(--gold)' }} />
+                    <span>{e.email}</span>
+                    <span className={`badge ${e.confidence === 'high' ? 'badge-verified' : e.confidence === 'medium' ? 'badge-cool' : 'badge-cold'}`}>{e.confidence}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {result.companies && (
+            <div>
+              <div className="section-title"><span className="gold-dot" />Found {result.total_found} Companies</div>
+              <div style={{ display: 'grid', gap: 8 }}>
+                {result.companies.slice(0, 10).map((c, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+                    <div><span style={{ fontWeight: 600 }}>{c.company_name}</span><span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>{c.company_domain}</span></div>
+                    <div style={{ color: 'var(--text-secondary)' }}>{c.industry || '—'}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </motion.div>
+      )}
+      {result?.error && (
+        <div className="card" style={{ borderColor: 'rgba(255,68,68,0.3)' }}>
+          <p style={{ color: 'var(--error)' }}><AlertCircle size={16} style={{ verticalAlign: 'middle', marginRight: 6 }} />{result.error}</p>
+        </div>
+      )}
+    </motion.div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════
+// PAGE: Agencies
+// ══════════════════════════════════════════════════════════════
+function AgenciesPage() {
+  const [agencies, setAgencies] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [showCreate, setShowCreate] = useState(false)
+  const [form, setForm] = useState({ name: '', contact_email: '' })
+
+  useEffect(() => { api.getAgencies().then(setAgencies).catch(() => {}).finally(() => setLoading(false)) }, [])
+
+  const onCreate = async () => {
+    if (!form.name.trim()) return
+    await api.createAgency(form)
+    const data = await api.getAgencies()
+    setAgencies(data)
+    setShowCreate(false)
+    setForm({ name: '', contact_email: '' })
+  }
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <h1 className="page-title">Agencies</h1>
+          <p className="page-subtitle">Manage client agencies and delivery preferences</p>
+        </div>
+        <button className="btn btn-primary" onClick={() => setShowCreate(!showCreate)}>{showCreate ? 'Cancel' : '+ Add Agency'}</button>
+      </div>
+
+      {showCreate && (
+        <motion.div className="card" style={{ marginBottom: 20 }} initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <input className="input" placeholder="Agency Name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+            <input className="input" placeholder="Contact Email" value={form.contact_email} onChange={e => setForm({ ...form, contact_email: e.target.value })} />
+            <button className="btn btn-primary" onClick={onCreate}>Create</button>
+          </div>
+        </motion.div>
+      )}
+
+      {loading ? (
+        <div className="loading-container"><div className="spinner" /></div>
+      ) : agencies.length === 0 ? (
+        <div className="empty-state"><Building2 className="empty-state-icon" /><p>No agencies yet.</p></div>
+      ) : (
+        <div style={{ display: 'grid', gap: 16 }}>
+          {agencies.map(a => (
+            <motion.div key={a.id} className="card" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 600 }}>{a.name}</div>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{a.contact_email || '—'} · {a.delivery_day} delivery</div>
+                </div>
+                <div style={{ display: 'flex', gap: 20, textAlign: 'center' }}>
+                  <div><div className="stat-value" style={{ fontSize: 22 }}>{a.total_leads_sent || 0}</div><div className="stat-label">Leads Sent</div></div>
+                  <div><div className="stat-value" style={{ fontSize: 22 }}>{a.max_leads_per_week}</div><div className="stat-label">Max/Week</div></div>
+                  <span className={`badge ${a.status === 'active' ? 'badge-verified' : 'badge-cold'}`} style={{ alignSelf: 'center' }}>{a.status}</span>
+                </div>
+              </div>
+            </motion.div>
+          ))}
+        </div>
+      )}
+    </motion.div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════
+// PAGE: Pipeline
+// ══════════════════════════════════════════════════════════════
+function PipelinePage() {
+  const [status, setStatus] = useState(null)
+  const [runs, setRuns] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [starting, setStarting] = useState(false)
+  const [logs, setLogs] = useState([])
+  const logEndRef = useRef(null)
+
+  const fetchState = () => {
+    Promise.all([
+      api.getPipelineStatus().catch(() => null),
+      api.getPipelineRuns().catch(() => []),
+    ]).then(([s, r]) => { setStatus(s); setRuns(r); setLoading(false) })
+  }
+
+  useEffect(() => { fetchState() }, [])
+
+  // Auto-scroll logs
+  useEffect(() => {
+    if (logEndRef.current) logEndRef.current.scrollIntoView({ behavior: 'smooth' })
+  }, [logs])
+
+  // Stream pipeline logs if running
+  useEffect(() => {
+    let es = null;
+    if (status?.running) {
+      es = api.getPipelineStream();
+      es.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          setLogs(prev => [...prev, data]);
+          
+          if (data.message && data.message.includes('completed in') || data.message.includes('Pipeline crashed')) {
+             setTimeout(fetchState, 1500); // refresh full state when completed
+          }
+        } catch (err) {}
+      };
+      es.onerror = () => { es.close(); };
+    } else {
+      setLogs([]); // Clear logs when not running
+    }
+    return () => { if (es) es.close(); };
+  }, [status?.running]);
+
+  useEffect(() => {
+    Promise.all([
+      api.getPipelineStatus().catch(() => null),
+      api.getPipelineRuns().catch(() => []),
+    ]).then(([s, r]) => { setStatus(s); setRuns(r); setLoading(false) })
+  }, [])
+
+  const startRun = async () => {
+    setStarting(true)
+    setLogs([{ timestamp: new Date().toISOString(), stage: 'system', message: 'Initializing pipeline...', level: 'info' }])
+    try {
+      await api.startPipeline()
+      const s = await api.getPipelineStatus()
+      setStatus(s)
+    } catch (e) {
+      alert(e.message)
+      setLogs([])
+    }
+    setStarting(false)
+  }
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <h1 className="page-title">Pipeline</h1>
+          <p className="page-subtitle">Run and monitor the lead generation pipeline</p>
+        </div>
+        <button className="btn btn-primary" onClick={startRun} disabled={starting || status?.running}>
+          {starting ? <div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> : <><Play size={16} /> {status?.running ? 'Running...' : 'Start Pipeline'}</>}
+        </button>
+      </div>
+
+      {status?.running && (
+        <motion.div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 20 }}
+          initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}>
+          
+          <div style={{ backgroundColor: '#161618', borderBottom: '1px solid #2a2a2c', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
+            <span style={{ fontWeight: 600, color: 'var(--gold)', fontSize: 13 }}>LIVE CONSOLE</span>
+          </div>
+          
+          <div style={{ backgroundColor: '#0a0a0b', padding: '16px', maxHeight: 300, overflowY: 'auto', fontFamily: 'monospace', fontSize: 13, lineHeight: 1.6 }}>
+             {logs.length === 0 ? (
+               <div style={{ color: '#555' }}>Awaiting logs...</div>
+             ) : (
+               logs.map((log, i) => {
+                 let color = '#ccc';
+                 if (log.level === 'error') color = 'var(--error)';
+                 if (log.level === 'success') color = '#22cc44';
+                 if (log.stage === 'system') color = 'var(--gold)';
+                 
+                 return (
+                   <div key={i} style={{ display: 'flex', gap: 12, marginBottom: 4 }}>
+                     <span style={{ color: '#555', minWidth: 65 }}>{new Date(log.timestamp).toLocaleTimeString([], { hour12: false })}</span>
+                     <span style={{ color: '#888', minWidth: 80, textTransform: 'uppercase', fontSize: 11, paddingTop: 2 }}>[{log.stage}]</span>
+                     <span style={{ color }}>{log.message}</span>
+                   </div>
+                 );
+               })
+             )}
+             <div ref={logEndRef} />
+          </div>
+        </motion.div>
+      )}
+
+      <div className="section-title"><span className="gold-dot" />Run History</div>
+      {runs.length === 0 ? (
+        <div className="empty-state"><Clock className="empty-state-icon" /><p>No pipeline runs yet.</p></div>
+      ) : (
+        <div className="card" style={{ padding: 0, overflow: 'auto' }}>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Discovered</th>
+                <th>Leads</th>
+                <th>Delivered</th>
+                <th>Cost</th>
+                <th>Errors</th>
+                <th>Duration</th>
+                <th>Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {runs.map(r => (
+                <tr key={r.id}>
+                  <td style={{ fontWeight: 600 }}>#{r.id}</td>
+                  <td>{r.run_type}</td>
+                  <td><span className={`badge ${r.status === 'completed' ? 'badge-verified' : r.status === 'running' ? 'badge-cool' : 'badge-unverified'}`}>{r.status}</span></td>
+                  <td>{r.companies_discovered}</td>
+                  <td>{r.leads_generated}</td>
+                  <td>{r.leads_delivered}</td>
+                  <td>${(r.openai_cost_usd || 0).toFixed(2)}</td>
+                  <td style={{ color: r.error_count > 0 ? 'var(--error)' : 'var(--text-muted)' }}>{r.error_count}</td>
+                  <td>{r.duration_seconds ? `${Math.round(r.duration_seconds)}s` : '—'}</td>
+                  <td style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{r.started_at ? new Date(r.started_at).toLocaleDateString() : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </motion.div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════
+// PAGE: Analytics
+// ══════════════════════════════════════════════════════════════
+function AnalyticsPage() {
+  const [distributions, setDistributions] = useState(null)
+  const [costs, setCosts] = useState(null)
+  const [industries, setIndustries] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    Promise.all([
+      api.getDistributions().catch(() => null),
+      api.getCostBreakdown().catch(() => null),
+      api.getIndustries().catch(() => null),
+    ]).then(([d, c, i]) => {
+      setDistributions(d)
+      setCosts(c)
+      setIndustries(i)
+      setLoading(false)
+    })
+  }, [])
+
+  if (loading) return <div className="loading-container"><div className="spinner" /></div>
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <div className="page-header">
+        <h1 className="page-title">Analytics</h1>
+        <p className="page-subtitle">Score distributions, industry breakdown, and cost analysis</p>
+      </div>
+
+      <div className="grid-2">
+        {distributions?.hiring_intensity && (
+          <div className="chart-container">
+            <div className="chart-title">Hiring Intensity Distribution</div>
+            <Bar
+              data={{
+                labels: distributions.hiring_intensity.labels,
+                datasets: [{
+                  label: 'Leads',
+                  data: distributions.hiring_intensity.values,
+                  backgroundColor: 'rgba(212, 168, 67, 0.6)',
+                  borderColor: '#d4a843',
+                  borderWidth: 1,
+                  borderRadius: 4,
+                }],
+              }}
+              options={{ ...chartDefaults, plugins: { ...chartDefaults.plugins, legend: { display: false } } }}
+            />
+          </div>
+        )}
+
+        {distributions?.data_confidence && (
+          <div className="chart-container">
+            <div className="chart-title">Data Confidence Distribution</div>
+            <Bar
+              data={{
+                labels: distributions.data_confidence.labels,
+                datasets: [{
+                  label: 'Leads',
+                  data: distributions.data_confidence.values,
+                  backgroundColor: 'rgba(34, 204, 68, 0.5)',
+                  borderColor: '#22cc44',
+                  borderWidth: 1,
+                  borderRadius: 4,
+                }],
+              }}
+              options={{ ...chartDefaults, plugins: { ...chartDefaults.plugins, legend: { display: false } } }}
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="grid-2">
+        {industries?.industries?.length > 0 && (
+          <div className="chart-container">
+            <div className="chart-title">Top Industries</div>
+            <Doughnut
+              data={{
+                labels: industries.industries.map(i => i.name),
+                datasets: [{
+                  data: industries.industries.map(i => i.count),
+                  backgroundColor: ['#d4a843', '#ff9500', '#4488ff', '#22cc44', '#ff4444', '#9944ff', '#ff44aa', '#44cccc', '#8888ff', '#cccc44'],
+                  borderWidth: 0,
+                }],
+              }}
+              options={{ cutout: '55%', plugins: { legend: { position: 'right', labels: { color: '#a0a0a0', padding: 10 } } } }}
+            />
+          </div>
+        )}
+
+        {costs?.stages?.length > 0 && (
+          <div className="chart-container">
+            <div className="chart-title">Cost Breakdown (30d) — Total: ${costs.total_usd}</div>
+            <Doughnut
+              data={{
+                labels: costs.stages.map(s => s.name),
+                datasets: [{
+                  data: costs.stages.map(s => s.cost_usd),
+                  backgroundColor: ['#d4a843', '#ff9500', '#4488ff', '#22cc44', '#ff4444'],
+                  borderWidth: 0,
+                }],
+              }}
+              options={{ cutout: '60%', plugins: { legend: { position: 'right', labels: { color: '#a0a0a0', padding: 10 } } } }}
+            />
+          </div>
+        )}
+      </div>
+    </motion.div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════
+// PAGE: Notifications
+// ══════════════════════════════════════════════════════════════
+function NotificationsPage() {
+  const [notifs, setNotifs] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => { api.getNotifications().then(setNotifs).catch(() => {}).finally(() => setLoading(false)) }, [])
+
+  const onMarkAllRead = async () => {
+    await api.markAllRead()
+    const data = await api.getNotifications()
+    setNotifs(data)
+  }
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <h1 className="page-title">Notifications</h1>
+          <p className="page-subtitle">System alerts, pipeline updates, and hot lead notifications</p>
+        </div>
+        <button className="btn btn-secondary" onClick={onMarkAllRead}><CheckCircle size={14} /> Mark All Read</button>
+      </div>
+
+      {loading ? (
+        <div className="loading-container"><div className="spinner" /></div>
+      ) : notifs.length === 0 ? (
+        <div className="empty-state"><Bell className="empty-state-icon" /><p>No notifications yet.</p></div>
+      ) : (
+        notifs.map(n => (
+          <motion.div key={n.id} className="notif-card" initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            style={{ opacity: n.is_read ? 0.6 : 1 }}>
+            <div className={`notif-dot ${n.severity}`} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600 }}>{n.title}</div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 2 }}>{n.message}</div>
+              <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 6 }}>
+                {n.created_at ? new Date(n.created_at).toLocaleString() : '—'}
+              </div>
+            </div>
+            {!n.is_read && (
+              <button className="btn btn-ghost" onClick={async () => {
+                await api.markRead(n.id)
+                setNotifs(notifs.map(x => x.id === n.id ? { ...x, is_read: true } : x))
+              }}>Mark Read</button>
+            )}
+          </motion.div>
+        ))
+      )}
+    </motion.div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════
+// PAGE: Settings
+// ══════════════════════════════════════════════════════════════
+function SettingsPage() {
+  const [settings, setSettings] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [edits, setEdits] = useState({})
+
+  useEffect(() => { api.getSettings().then(setSettings).catch(() => {}).finally(() => setLoading(false)) }, [])
+
+  const onSave = async () => {
+    const updates = Object.entries(edits).map(([key, value]) => ({ key, value }))
+    if (updates.length === 0) return
+    await api.updateSettings(updates)
+    const data = await api.getSettings()
+    setSettings(data)
+    setEdits({})
+  }
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <h1 className="page-title">Settings</h1>
+          <p className="page-subtitle">Pipeline configuration, API limits, and system preferences</p>
+        </div>
+        <button className="btn btn-primary" onClick={onSave} disabled={Object.keys(edits).length === 0}>Save Changes</button>
+      </div>
+
+      {loading ? (
+        <div className="loading-container"><div className="spinner" /></div>
+      ) : (
+        <div className="card">
+          <div style={{ display: 'grid', gap: 14 }}>
+            {settings.map(s => (
+              <div key={s.key} style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 12, alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>{s.key}</div>
+                  <div style={{ color: 'var(--text-muted)', fontSize: 11.5 }}>{s.description}</div>
+                </div>
+                <input className="input" value={edits[s.key] !== undefined ? edits[s.key] : s.value}
+                  onChange={e => setEdits({ ...edits, [s.key]: e.target.value })}
+                  style={{ maxWidth: 400 }}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </motion.div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════
+// SIDEBAR
+// ══════════════════════════════════════════════════════════════
+function Sidebar() {
+  const [unread, setUnread] = useState(0)
+
+  useEffect(() => {
+    api.getUnreadCount().then(d => setUnread(d.unread)).catch(() => {})
+    const interval = setInterval(() => {
+      api.getUnreadCount().then(d => setUnread(d.unread)).catch(() => {})
+    }, 30000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const navItems = [
+    { path: '/', label: 'Dashboard', icon: LayoutDashboard },
+    { path: '/leads', label: 'Leads', icon: Users },
+    { path: '/search', label: 'Search', icon: Search },
+    { path: '/pipeline', label: 'Pipeline', icon: Zap },
+    { path: '/agencies', label: 'Agencies', icon: Building2 },
+    { path: '/analytics', label: 'Analytics', icon: BarChart3 },
+    { path: '/notifications', label: 'Notifications', icon: Bell, badge: unread },
+    { path: '/settings', label: 'Settings', icon: Settings },
+  ]
+
+  return (
+    <aside className="sidebar">
+      <div className="sidebar-header">
+        <div className="sidebar-logo">CS</div>
+        <div>
+          <div className="sidebar-title">ConnectorOS</div>
+          <div className="sidebar-subtitle">Scout v2.0</div>
+        </div>
+      </div>
+      <nav className="sidebar-nav">
+        {navItems.map(item => (
+          <NavLink
+            key={item.path}
+            to={item.path}
+            end={item.path === '/'}
+            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+          >
+            <item.icon className="nav-icon" />
+            {item.label}
+            {item.badge > 0 && <span className="nav-badge">{item.badge}</span>}
+          </NavLink>
+        ))}
+      </nav>
+    </aside>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════
+// APP
+// ══════════════════════════════════════════════════════════════
+export default function App() {
+  return (
+    <Router>
+      <div className="app-layout">
+        <Sidebar />
+        <main className="main-content">
+          <Routes>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/leads" element={<LeadsPage />} />
+            <Route path="/search" element={<SearchPage />} />
+            <Route path="/pipeline" element={<PipelinePage />} />
+            <Route path="/agencies" element={<AgenciesPage />} />
+            <Route path="/analytics" element={<AnalyticsPage />} />
+            <Route path="/notifications" element={<NotificationsPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+          </Routes>
+        </main>
+      </div>
+    </Router>
+  )
+}

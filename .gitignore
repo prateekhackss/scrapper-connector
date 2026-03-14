@@ -1,0 +1,55 @@
+# ============================================================
+# ConnectorOS Scout — .gitignore
+# Security: Ensures secrets, data, and build artifacts
+# are never committed to version control.
+# ============================================================
+
+# --- Secrets (CRITICAL — never commit) ---
+.env
+*.pem
+*.key
+
+# --- Database & Data ---
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Logs ---
+logs/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+venv/
+.venv/
+env/
+
+# --- Node / Frontend ---
+node_modules/
+frontend/dist/
+frontend/.vite/
+.turbo/
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Exports ---
+exports/
+*.xlsx
+*.csv
