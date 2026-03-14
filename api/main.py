@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,6 +29,10 @@ from pipeline.scheduler import start_scheduler, stop_scheduler
 from api.routes import pipeline, leads, agencies, search, analytics, notifications, settings as settings_routes
 
 logger = get_logger("api")
+app_state: dict[str, Any] = {
+    "startup_ok": False,
+    "startup_error": None,
+}
 
 
 @asynccontextmanager
@@ -36,18 +41,25 @@ async def lifespan(app: FastAPI):
     # Startup
     setup_logging()
     logger.info("app_starting")
-    init_db()
-    logger.info("database_initialized")
-    # Capture the running event loop so SSE can deliver events thread-safely
-    set_main_loop(asyncio.get_event_loop())
-    if not IS_VERCEL:
-        start_scheduler()
-        logger.info("scheduler_started")
-    else:
-        logger.info("scheduler_skipped_serverless")
+    try:
+        init_db()
+        logger.info("database_initialized")
+        # Capture the running event loop so SSE can deliver events thread-safely
+        set_main_loop(asyncio.get_event_loop())
+        if not IS_VERCEL:
+            start_scheduler()
+            logger.info("scheduler_started")
+        else:
+            logger.info("scheduler_skipped_serverless")
+        app_state["startup_ok"] = True
+        app_state["startup_error"] = None
+    except Exception as exc:
+        app_state["startup_ok"] = False
+        app_state["startup_error"] = str(exc)
+        logger.exception("app_startup_failed", error=str(exc))
     yield
     # Shutdown
-    if not IS_VERCEL:
+    if app_state["startup_ok"] and not IS_VERCEL:
         stop_scheduler()
     logger.info("app_shutdown")
 
@@ -84,4 +96,9 @@ app.include_router(settings_routes.router, prefix="/api/settings", tags=["Settin
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "version": "2.0.0"}
+    return {
+        "status": "healthy" if app_state["startup_ok"] else "degraded",
+        "version": "2.0.0",
+        "startup_ok": app_state["startup_ok"],
+        "startup_error": app_state["startup_error"],
+    }
