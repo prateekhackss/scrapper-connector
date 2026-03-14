@@ -5,7 +5,7 @@
  * Security: all calls go through the Vite proxy (no CORS leaks).
  */
 
-const BASE = '/api';
+const BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
 
 async function fetchJSON(url, options = {}) {
   const res = await fetch(BASE + url, {

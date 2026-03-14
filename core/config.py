@@ -50,6 +50,14 @@ def get_env(key: str, default: str = "") -> str:
     return os.getenv(key, default)
 
 
+def get_env_list(key: str, default: list[str] | None = None) -> list[str]:
+    """Read a comma-separated environment variable into a clean string list."""
+    raw = os.getenv(key, "")
+    if not raw:
+        return list(default or [])
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 # API Keys (NEVER log these)
 OPENAI_API_KEY: str = get_env("OPENAI_API_KEY")
 SERPAPI_KEY: str = get_env("SERPAPI_KEY")
@@ -102,6 +110,20 @@ DATABASE_URL: str = _resolve_database_url()
 HOST: str = get_env("HOST", "0.0.0.0")
 PORT: int = int(get_env("PORT", "8000"))
 LOG_LEVEL: str = get_env("LOG_LEVEL", "INFO")
+
+
+# Frontend / CORS
+FRONTEND_PORT: str = get_env("FRONTEND_PORT", "5173")
+FRONTEND_ORIGIN: str = get_env("FRONTEND_ORIGIN", f"http://localhost:{FRONTEND_PORT}")
+CORS_ALLOWED_ORIGINS: list[str] = get_env_list(
+    "CORS_ALLOWED_ORIGINS",
+    default=[
+        FRONTEND_ORIGIN,
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+    ],
+)
 
 
 # Sensitive keys that must never appear in logs

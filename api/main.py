@@ -19,7 +19,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from core.config import HOST, PORT, EXPORTS_DIR, IS_VERCEL
+from core.config import HOST, PORT, EXPORTS_DIR, IS_VERCEL, CORS_ALLOWED_ORIGINS
 from core.database import init_db
 from core.logger import setup_logging, get_logger
 from core.sse import set_main_loop
@@ -62,12 +62,7 @@ app = FastAPI(
 # ── CORS (restrict to known origins) ────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",      # Vite dev server
-        "http://localhost:3000",      # Alternative dev port
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["*"],
