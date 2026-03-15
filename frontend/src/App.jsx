@@ -241,8 +241,10 @@ function LeadsPage() {
   const [leads, setLeads] = useState([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
+  const [runs, setRuns] = useState([])
   const [search, setSearch] = useState('')
   const [roleFocus, setRoleFocus] = useState('engineering')
+  const [selectedRunFilter, setSelectedRunFilter] = useState('latest')
   const [priorityFilter, setPriorityFilter] = useState('')
   const [buyerReadyOnly, setBuyerReadyOnly] = useState(false)
   const [qaFilter, setQaFilter] = useState('')
@@ -250,10 +252,14 @@ function LeadsPage() {
   const [selectedLeadId, setSelectedLeadId] = useState(null)
   const [selectedLead, setSelectedLead] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  const selectedRunIndex = runs.findIndex(run => String(run.id) === selectedRunFilter)
+  const canGoToOlderRun = selectedRunIndex >= 0 && selectedRunIndex < runs.length - 1
+  const canGoToNewerRun = selectedRunIndex > 0
 
   const fetchLeads = () => {
     setLoading(true)
     const params = { page, per_page: 25, buyer_ready_only: buyerReadyOnly, role_focus: roleFocus }
+    if (selectedRunFilter !== 'latest') params.pipeline_run_id = selectedRunFilter
     if (search) params.search = search
     if (priorityFilter) params.priority_tier = priorityFilter
     if (qaFilter) params.qa_status = qaFilter
@@ -284,16 +290,45 @@ function LeadsPage() {
     fetchLeads()
   }
 
-  useEffect(() => { fetchLeads() }, [page, priorityFilter, buyerReadyOnly, qaFilter, roleFocus])
+  useEffect(() => {
+    api.getPipelineRuns().then(data => setRuns(data || [])).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    setSelectedLeadId(null)
+    setSelectedLead(null)
+    fetchLeads()
+  }, [page, priorityFilter, buyerReadyOnly, qaFilter, roleFocus, selectedRunFilter])
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
       <div className="page-header">
         <h1 className="page-title">Leads</h1>
-        <p className="page-subtitle">{total} company snapshots · Sorted by buyer readiness, then hiring intensity</p>
+        <p className="page-subtitle">
+          {total} company snapshots · {selectedRunFilter === 'latest' ? 'Latest snapshot view' : `Run #${selectedRunFilter} backup view`}
+        </p>
       </div>
 
       <div className="filters-bar">
+        <div className="filter-group">
+          <span className="filter-label">Snapshot</span>
+          <select
+            className="select"
+            value={selectedRunFilter}
+            onChange={e => {
+              setPage(1)
+              setSelectedRunFilter(e.target.value)
+            }}
+            style={{ width: 190 }}
+          >
+            <option value="latest">Latest Snapshot</option>
+            {runs.map((run) => (
+              <option key={run.id} value={String(run.id)}>
+                Run #{run.id} · {run.status}
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="filter-group">
           <span className="filter-label">Search</span>
           <input className="input" placeholder="Company name..." value={search}
@@ -361,9 +396,57 @@ function LeadsPage() {
           </select>
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'flex-end' }}>
-          <button className="btn btn-secondary" onClick={fetchLeads}><RefreshCcw size={14} /> Refresh</button>
+          <div style={{ display: 'flex', gap: 10 }}>
+            {selectedRunFilter !== 'latest' && (
+              <>
+                <button
+                  className="btn btn-ghost"
+                  disabled={!canGoToNewerRun}
+                  onClick={() => {
+                    if (!canGoToNewerRun) return
+                    setPage(1)
+                    setSelectedRunFilter(String(runs[selectedRunIndex - 1].id))
+                  }}
+                >
+                  Newer Run
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  disabled={!canGoToOlderRun}
+                  onClick={() => {
+                    if (!canGoToOlderRun) return
+                    setPage(1)
+                    setSelectedRunFilter(String(runs[selectedRunIndex + 1].id))
+                  }}
+                >
+                  Older Run
+                </button>
+              </>
+            )}
+            <button className="btn btn-secondary" onClick={fetchLeads}><RefreshCcw size={14} /> Refresh</button>
+          </div>
         </div>
       </div>
+
+      {selectedRunFilter !== 'latest' && (
+        <div className="card" style={{ marginBottom: 18, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontWeight: 700 }}>Viewing Run #{selectedRunFilter} backup</div>
+            <div style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
+              This shows the historical lead snapshot saved for that pipeline run, not the newest company state.
+            </div>
+          </div>
+          <button
+            className="btn btn-secondary"
+            onClick={() => {
+              setPage(1)
+              setSelectedRunFilter('latest')
+            }}
+          >
+            Back to Latest
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <div className="loading-container"><div className="spinner" /></div>

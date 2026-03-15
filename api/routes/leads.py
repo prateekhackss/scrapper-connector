@@ -69,21 +69,32 @@ async def list_leads(
     buyer_ready_only: bool = False,
     qa_status: str | None = None,
     role_focus: str | None = None,
+    pipeline_run_id: int | None = Query(default=None, ge=1),
 ):
     """List leads with filtering and pagination."""
     db = SessionLocal()
     try:
-        latest_ids_query = db.query(func.max(LeadRow.id).label("lead_id"))
-        if role_focus:
-            latest_ids_query = latest_ids_query.filter(LeadRow.role_focus == role_focus)
-        latest_ids = latest_ids_query.group_by(LeadRow.company_id).subquery()
+        if pipeline_run_id:
+            query = (
+                db.query(LeadRow, CompanyRow, ContactRow)
+                .join(CompanyRow, LeadRow.company_id == CompanyRow.id)
+                .outerjoin(ContactRow, LeadRow.contact_id == ContactRow.id)
+                .filter(LeadRow.pipeline_run_id == pipeline_run_id)
+            )
+            if role_focus:
+                query = query.filter(LeadRow.role_focus == role_focus)
+        else:
+            latest_ids_query = db.query(func.max(LeadRow.id).label("lead_id"))
+            if role_focus:
+                latest_ids_query = latest_ids_query.filter(LeadRow.role_focus == role_focus)
+            latest_ids = latest_ids_query.group_by(LeadRow.company_id).subquery()
 
-        query = (
-            db.query(LeadRow, CompanyRow, ContactRow)
-            .join(latest_ids, LeadRow.id == latest_ids.c.lead_id)
-            .join(CompanyRow, LeadRow.company_id == CompanyRow.id)
-            .outerjoin(ContactRow, LeadRow.contact_id == ContactRow.id)
-        )
+            query = (
+                db.query(LeadRow, CompanyRow, ContactRow)
+                .join(latest_ids, LeadRow.id == latest_ids.c.lead_id)
+                .join(CompanyRow, LeadRow.company_id == CompanyRow.id)
+                .outerjoin(ContactRow, LeadRow.contact_id == ContactRow.id)
+            )
 
         if min_hiring > 0:
             query = query.filter(LeadRow.hiring_intensity >= min_hiring)
@@ -95,7 +106,7 @@ async def list_leads(
             query = query.filter(LeadRow.hiring_label == hiring_label)
         if status:
             query = query.filter(LeadRow.status == status)
-        else:
+        elif not pipeline_run_id:
             query = query.filter(LeadRow.status != "archived")
         if search:
             query = query.filter(CompanyRow.company_name.ilike(f"%{search}%"))
@@ -181,6 +192,7 @@ async def list_leads(
             "page": page,
             "per_page": per_page,
             "role_focus": role_focus,
+            "pipeline_run_id": pipeline_run_id,
             "total_pages": (total + per_page - 1) // per_page,
         }
 
