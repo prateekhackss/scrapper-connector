@@ -44,15 +44,15 @@ async def list_leads(
     search: str | None = None,
     buyer_ready_only: bool = False,
     qa_status: str | None = None,
+    role_focus: str | None = None,
 ):
     """List leads with filtering and pagination."""
     db = SessionLocal()
     try:
-        latest_ids = (
-            db.query(func.max(LeadRow.id).label("lead_id"))
-            .group_by(LeadRow.company_id)
-            .subquery()
-        )
+        latest_ids_query = db.query(func.max(LeadRow.id).label("lead_id"))
+        if role_focus:
+            latest_ids_query = latest_ids_query.filter(LeadRow.role_focus == role_focus)
+        latest_ids = latest_ids_query.group_by(LeadRow.company_id).subquery()
 
         query = (
             db.query(LeadRow, CompanyRow, ContactRow)
@@ -105,7 +105,10 @@ async def list_leads(
         for lead, company, contact in rows:
             role_evidence_urls = []
             seen_urls = set()
-            for posting in postings_by_company.get(company.id, [])[:5]:
+            matching_postings = postings_by_company.get(company.id, [])
+            if lead.role_focus and lead.role_focus != "all":
+                matching_postings = [posting for posting in matching_postings if posting.role_family == lead.role_focus]
+            for posting in matching_postings[:5]:
                 for url in ([posting.job_url] if posting.job_url else []) + json.loads(posting.evidence_urls or "[]"):
                     if url and url not in seen_urls:
                         seen_urls.add(url)
@@ -119,6 +122,7 @@ async def list_leads(
                 "headquarters": company.headquarters,
                 "employee_count": company.employee_count,
                 "tech_stack": json.loads(company.tech_stack or "[]"),
+                "role_focus": lead.role_focus,
                 "role_count": lead.role_count,
                 "top_roles": json.loads(lead.top_roles or "[]"),
                 "hiring_intensity": lead.hiring_intensity,
@@ -152,6 +156,7 @@ async def list_leads(
             "total": total,
             "page": page,
             "per_page": per_page,
+            "role_focus": role_focus,
             "total_pages": (total + per_page - 1) // per_page,
         }
 
@@ -206,6 +211,8 @@ async def get_lead(lead_id: int):
         company = db.query(CompanyRow).filter_by(id=lead.company_id).first()
         contact = db.query(ContactRow).filter_by(id=lead.contact_id).first() if lead.contact_id else None
         postings = db.query(JobPostingRow).filter_by(company_id=lead.company_id, is_active=True).all()
+        if lead.role_focus and lead.role_focus != "all":
+            postings = [posting for posting in postings if posting.role_family == lead.role_focus]
 
         return {
             "id": lead.id,
@@ -242,6 +249,7 @@ async def get_lead(lead_id: int):
             "job_postings": [
                 {
                     "title": posting.job_title,
+                    "role_family": posting.role_family,
                     "job_url": posting.job_url,
                     "location": posting.location,
                     "posted_date": posting.posted_date,
@@ -251,6 +259,7 @@ async def get_lead(lead_id: int):
                 for posting in postings
             ],
             "scoring": {
+                "role_focus": lead.role_focus,
                 "hiring_intensity": lead.hiring_intensity,
                 "hiring_label": lead.hiring_label,
                 "data_confidence": lead.data_confidence,

@@ -22,10 +22,10 @@ async function fetchJSON(url, options = {}) {
 }
 
 // ── Pipeline ────────────────────────────────────────────────
-export const startPipeline = (market) =>
+export const startPipeline = (payload = {}) =>
   fetchJSON('/pipeline/start', {
     method: 'POST',
-    body: JSON.stringify(market ? { target_market: market } : {}),
+    body: JSON.stringify(payload),
   });
 
 export const stopPipeline = () =>

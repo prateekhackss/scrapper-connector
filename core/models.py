@@ -139,6 +139,7 @@ class CompanyBase(BaseModel):
 class JobPosting(BaseModel):
     company_domain: Optional[str] = None
     job_title: str
+    role_family: Optional[str] = None
     job_url: Optional[str] = None
     location: Optional[str] = None
     remote_policy: Optional[str] = None   # onsite | remote | hybrid
@@ -257,6 +258,7 @@ class Agency(BaseModel):
 class PipelineRunStats(BaseModel):
     id: Optional[int] = None
     run_type: str = "full"
+    target_role_family: Optional[str] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     status: str = "running"

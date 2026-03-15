@@ -30,6 +30,7 @@ _VERCEL_STALE_RUN_TIMEOUT = timedelta(minutes=10)
 
 class StartPipelineRequest(BaseModel):
     target_market: str | None = None
+    role_focus: str | None = None
 
 
 def _as_utc(dt: datetime | None) -> datetime | None:
@@ -112,13 +113,14 @@ async def start_pipeline(
         raise HTTPException(status_code=409, detail="Pipeline is already running.")
 
     resolved_market = (payload.target_market if payload else None) or target_market
+    resolved_role_focus = payload.role_focus if payload else None
 
     _pipeline_running = True
 
     async def _run():
         global _pipeline_running, _pipeline_task
         try:
-            await run_full_pipeline(resolved_market)
+            await run_full_pipeline(resolved_market, resolved_role_focus)
         except Exception as exc:
             logger.exception("pipeline_background_task_failed", error=str(exc))
             await publish_event("system", f"Pipeline failed to start: {str(exc)}", level="error")
@@ -129,7 +131,11 @@ async def start_pipeline(
     # Run on the SAME event loop as FastAPI so SSE queues are accessible
     _pipeline_task = asyncio.create_task(_run())
 
-    return {"status": "started", "message": "Pipeline started in background."}
+    return {
+        "status": "started",
+        "message": "Pipeline started in background.",
+        "role_focus": resolved_role_focus or "engineering",
+    }
 
 
 @router.post("/stop")
@@ -188,6 +194,7 @@ async def pipeline_status():
                 "id": latest.id,
                 "status": latest.status,
                 "run_type": latest.run_type,
+                "target_role_family": latest.target_role_family,
                 "started_at": latest.started_at.isoformat() if latest.started_at else None,
                 "completed_at": latest.completed_at.isoformat() if latest.completed_at else None,
                 "duration_seconds": latest.duration_seconds,
@@ -223,6 +230,7 @@ async def list_pipeline_runs(limit: int = 20):
                 "run_type": r.run_type,
                 "status": r.status,
                 "started_at": r.started_at.isoformat() if r.started_at else None,
+                "target_role_family": r.target_role_family,
                 "completed_at": r.completed_at.isoformat() if r.completed_at else None,
                 "duration_seconds": r.duration_seconds,
                 "companies_discovered": r.companies_discovered,

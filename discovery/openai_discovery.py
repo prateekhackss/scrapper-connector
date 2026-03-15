@@ -24,6 +24,7 @@ from core.config import OPENAI_API_KEY
 from core.models import CompanyBase, JobPosting
 from core.logger import get_logger
 from core.exceptions import APIError, BudgetExceededError
+from core.roles import classify_role_family, get_role_focus_label, normalize_role_focus
 
 logger = get_logger("discovery.openai")
 
@@ -59,12 +60,13 @@ If you cannot produce job_openings, include job_titles as a fallback.
 Return ONLY valid JSON. No markdown, no explanation. Just the JSON array."""
 
 
-def _build_user_prompt(market: str, segment: str | None = None) -> str:
+def _build_user_prompt(market: str, role_focus: str | None = None, segment: str | None = None) -> str:
     """Build the user prompt for a discovery call."""
-    prompt = f"Find 15-20 tech companies actively hiring in the market: {market}."
+    focus_label = get_role_focus_label(role_focus)
+    prompt = f"Find 15-20 tech companies actively hiring for {focus_label} roles in the market: {market}."
     if segment:
         prompt += f" Focus specifically on the {segment} segment."
-    prompt += " Search career pages, LinkedIn, and niche job boards for companies with current openings."
+    prompt += f" Search career pages, LinkedIn, and niche job boards for companies with current {focus_label} openings."
     return prompt
 
 
@@ -72,7 +74,11 @@ def _build_user_prompt(market: str, segment: str | None = None) -> str:
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=2, min=2, max=30),
 )
-async def _call_openai_discovery(market: str, segment: str | None = None) -> list[dict]:
+async def _call_openai_discovery(
+    market: str,
+    role_focus: str | None = None,
+    segment: str | None = None,
+) -> list[dict]:
     """Make a single OpenAI discovery call with web search."""
     if not OPENAI_API_KEY:
         raise APIError("openai", "OPENAI_API_KEY not configured in .env")
@@ -86,7 +92,7 @@ async def _call_openai_discovery(market: str, segment: str | None = None) -> lis
             tools=[{"type": "web_search_preview"}],
             input=[
                 {"role": "system", "content": DISCOVERY_SYSTEM_PROMPT},
-                {"role": "user", "content": _build_user_prompt(market, segment)},
+                {"role": "user", "content": _build_user_prompt(market, role_focus, segment)},
             ],
         )
 
@@ -129,6 +135,7 @@ async def _call_openai_discovery(market: str, segment: str | None = None) -> lis
 async def collect_from_openai(
     target_market: str = "US tech companies",
     segments: list[str] | None = None,
+    role_focus: str | None = "engineering",
 ) -> tuple[list[CompanyBase], list[JobPosting]]:
     """
     Discover companies via OpenAI web search.
@@ -143,12 +150,13 @@ async def collect_from_openai(
     if segments is None:
         segments = ["SaaS and cloud platforms", "Fintech and financial services", "AI/ML and data companies"]
 
+    selected_focus = normalize_role_focus(role_focus)
     companies_map: dict[str, CompanyBase] = {}
     all_postings: list[JobPosting] = []
 
     for segment in segments:
         try:
-            results = await _call_openai_discovery(target_market, segment)
+            results = await _call_openai_discovery(target_market, selected_focus, segment)
 
             for item in results:
                 name = item.get("company_name", "").strip()
@@ -187,9 +195,11 @@ async def collect_from_openai(
                         continue
 
                     evidence_urls = opening.get("source_urls") or source_urls
+                    role_family = classify_role_family(title)
                     posting = JobPosting(
                         company_domain=domain,
                         job_title=title,
+                        role_family=role_family,
                         job_url=opening.get("job_url"),
                         location=opening.get("location") or item.get("headquarters", ""),
                         posted_date=opening.get("posted_date"),
@@ -202,9 +212,11 @@ async def collect_from_openai(
                 # Backward-compatible fallback: title-only openings.
                 if not openings:
                     for title in item.get("job_titles", []):
+                        role_family = classify_role_family(title)
                         posting = JobPosting(
                             company_domain=domain,
                             job_title=title,
+                            role_family=role_family,
                             location=item.get("headquarters", ""),
                             evidence_urls=source_urls,
                             source="openai",

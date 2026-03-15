@@ -23,6 +23,7 @@ from core.config import SERPAPI_KEY
 from core.models import CompanyBase, JobPosting
 from core.logger import get_logger
 from core.exceptions import APIError, RateLimitError
+from core.roles import classify_role_family, get_serpapi_queries, role_focus_matches, normalize_role_focus
 
 logger = get_logger("discovery.serpapi")
 
@@ -97,6 +98,7 @@ async def collect_from_serpapi(
     queries: list[str] | None = None,
     location: str = "United States",
     max_results: int = 20,
+    role_focus: str | None = "engineering",
 ) -> tuple[list[CompanyBase], list[JobPosting]]:
     """
     Run SerpAPI Google Jobs searches and return discovered companies + postings.
@@ -110,14 +112,9 @@ async def collect_from_serpapi(
     Returns:
         Tuple of (companies, job_postings).
     """
+    selected_focus = normalize_role_focus(role_focus)
     if queries is None:
-        queries = [
-            "software engineer",
-            "backend developer",
-            "frontend developer",
-            "full stack developer",
-            "devops engineer",
-        ]
+        queries = get_serpapi_queries(selected_focus)
 
     companies_map: dict[str, CompanyBase] = {}
     all_postings: list[JobPosting] = []
@@ -131,6 +128,10 @@ async def collect_from_serpapi(
             for job in jobs:
                 company_name = job.get("company_name", "").strip()
                 if not company_name:
+                    continue
+
+                role_family = classify_role_family(job.get("title", ""))
+                if not role_focus_matches(role_family, selected_focus):
                     continue
 
                 # Build domain from detected_extensions or guess
@@ -151,6 +152,7 @@ async def collect_from_serpapi(
                 posting = JobPosting(
                     company_domain=domain,
                     job_title=job.get("title", "Unknown"),
+                    role_family=role_family,
                     job_url=job.get("share_link") or job.get("apply_link", {}).get("link"),
                     location=job.get("location", ""),
                     remote_policy=_parse_remote_policy(job.get("extensions")),

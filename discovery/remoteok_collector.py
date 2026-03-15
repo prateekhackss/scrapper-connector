@@ -19,6 +19,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 from core.models import CompanyBase, JobPosting
 from core.logger import get_logger
+from core.roles import classify_role_family, role_focus_matches, normalize_role_focus
 
 logger = get_logger("discovery.remoteok")
 
@@ -77,7 +78,10 @@ async def _fetch_remoteok() -> list[dict]:
         return data[1:] if len(data) > 1 else []
 
 
-async def collect_from_remoteok(max_results: int = 100) -> tuple[list[CompanyBase], list[JobPosting]]:
+async def collect_from_remoteok(
+    max_results: int = 100,
+    role_focus: str | None = "engineering",
+) -> tuple[list[CompanyBase], list[JobPosting]]:
     """
     Fetch remote jobs from RemoteOK and return companies + postings.
 
@@ -98,9 +102,15 @@ async def collect_from_remoteok(max_results: int = 100) -> tuple[list[CompanyBas
     companies_map: dict[str, CompanyBase] = {}
     all_postings: list[JobPosting] = []
 
+    selected_focus = normalize_role_focus(role_focus)
+
     for job in jobs[:max_results]:
         company_name = job.get("company", "").strip()
         if not company_name:
+            continue
+
+        role_family = classify_role_family(job.get("position", ""))
+        if not role_focus_matches(role_family, selected_focus):
             continue
 
         company_url = (
@@ -127,6 +137,7 @@ async def collect_from_remoteok(max_results: int = 100) -> tuple[list[CompanyBas
         posting = JobPosting(
             company_domain=domain,
             job_title=job.get("position", "Unknown"),
+            role_family=role_family,
             job_url=job.get("url"),
             location=job.get("location", "Remote"),
             remote_policy="remote",

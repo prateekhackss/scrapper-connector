@@ -13,14 +13,15 @@ Security:
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
-from core.database import SessionLocal, CompanyRow, JobPostingRow
+from core.database import SessionLocal, CompanyRow, JobPostingRow, get_setting
 from core.models import CompanyBase, JobPosting
 from core.logger import get_logger
+from core.roles import normalize_role_focus
 
 from discovery.serpapi_collector import collect_from_serpapi
 from discovery.remoteok_collector import collect_from_remoteok
@@ -116,6 +117,8 @@ def _insert_posting(db: Session, company_id: int, posting: JobPosting) -> None:
         )
         if exists:
             exists.last_scraped = datetime.now(timezone.utc)
+            if posting.role_family and not exists.role_family:
+                exists.role_family = posting.role_family
             return
     else:
         exists = (
@@ -130,11 +133,14 @@ def _insert_posting(db: Session, company_id: int, posting: JobPosting) -> None:
         )
         if exists:
             exists.last_scraped = datetime.now(timezone.utc)
+            if posting.role_family and not exists.role_family:
+                exists.role_family = posting.role_family
             return
 
     row = JobPostingRow(
         company_id=company_id,
         job_title=posting.job_title,
+        role_family=posting.role_family,
         job_url=posting.job_url,
         location=posting.location,
         remote_policy=posting.remote_policy,
@@ -170,8 +176,30 @@ def _infer_posting_domain(posting: JobPosting) -> str | None:
     return None
 
 
+def _has_recent_cached_openai_postings(db: Session, role_focus: str) -> bool:
+    """Reuse recent role-specific OpenAI discovery for one week to save tokens."""
+    if role_focus == "all":
+        return False
+
+    cache_days = int(get_setting("openai_discovery_cache_days", "7"))
+    min_postings = int(get_setting("openai_discovery_cache_min_postings", "15"))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=cache_days)
+    count = (
+        db.query(JobPostingRow)
+        .filter(
+            JobPostingRow.source == "openai",
+            JobPostingRow.role_family == role_focus,
+            JobPostingRow.last_scraped >= cutoff,
+            JobPostingRow.is_active == True,
+        )
+        .count()
+    )
+    return count >= min_postings
+
+
 async def run_discovery(
     target_market: str = "US tech companies",
+    role_focus: str | None = "engineering",
     enable_serpapi: bool = True,
     enable_remoteok: bool = True,
     enable_openai: bool = True,
@@ -188,13 +216,14 @@ async def run_discovery(
     Returns:
         Number of unique companies discovered.
     """
+    selected_focus = normalize_role_focus(role_focus)
     all_companies: list[CompanyBase] = []
     all_postings: list[JobPosting] = []
 
     # ── Source 1: SerpAPI ────────────────────────────────────────
     if enable_serpapi:
         try:
-            companies, postings = await collect_from_serpapi()
+            companies, postings = await collect_from_serpapi(role_focus=selected_focus)
             all_companies.extend(companies)
             all_postings.extend(postings)
             logger.info("discovery_serpapi_done", companies=len(companies), postings=len(postings))
@@ -204,7 +233,7 @@ async def run_discovery(
     # ── Source 2: RemoteOK ──────────────────────────────────────
     if enable_remoteok:
         try:
-            companies, postings = await collect_from_remoteok()
+            companies, postings = await collect_from_remoteok(role_focus=selected_focus)
             all_companies.extend(companies)
             all_postings.extend(postings)
             logger.info("discovery_remoteok_done", companies=len(companies), postings=len(postings))
@@ -214,10 +243,24 @@ async def run_discovery(
     # ── Source 3: OpenAI web search ─────────────────────────────
     if enable_openai:
         try:
-            companies, postings = await collect_from_openai(target_market)
-            all_companies.extend(companies)
-            all_postings.extend(postings)
-            logger.info("discovery_openai_done", companies=len(companies), postings=len(postings))
+            db = SessionLocal()
+            try:
+                use_cache = _has_recent_cached_openai_postings(db, selected_focus)
+            finally:
+                db.close()
+
+            if use_cache:
+                logger.info("discovery_openai_cache_hit", role_focus=selected_focus)
+            else:
+                companies, postings = await collect_from_openai(target_market, role_focus=selected_focus)
+                all_companies.extend(companies)
+                all_postings.extend(postings)
+                logger.info(
+                    "discovery_openai_done",
+                    companies=len(companies),
+                    postings=len(postings),
+                    role_focus=selected_focus,
+                )
         except Exception as e:
             logger.error("discovery_openai_failed", error=str(e))
 

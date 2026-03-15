@@ -122,6 +122,7 @@ class JobPostingRow(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     job_title = Column(String, nullable=False)
+    role_family = Column(String)
     job_url = Column(String)
     location = Column(String)
     remote_policy = Column(String)
@@ -208,6 +209,7 @@ class LeadRow(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     contact_id = Column(Integer, ForeignKey("contacts.id"))
+    role_focus = Column(String, default="engineering")
 
     hiring_intensity = Column(Integer, nullable=False, default=0)
     hiring_label = Column(String)
@@ -308,6 +310,7 @@ class PipelineRunRow(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
 
     run_type = Column(String, nullable=False)
+    target_role_family = Column(String, default="engineering")
     started_at = Column(DateTime, nullable=False, default=_utcnow)
     completed_at = Column(DateTime)
     status = Column(String, default="running")
@@ -435,6 +438,9 @@ _DEFAULT_SETTINGS: list[dict] = [
     {"key": "max_companies_per_run", "value": "200", "description": "Max companies per pipeline run"},
     {"key": "enrichment_delay_seconds", "value": "2", "description": "Delay between enrichment calls"},
     {"key": "verification_enabled", "value": "true", "description": "Run verification stage"},
+    {"key": "default_role_focus", "value": "engineering", "description": "Default role family for pipeline runs"},
+    {"key": "openai_discovery_cache_days", "value": "7", "description": "Reuse recent discovery data for this many days"},
+    {"key": "openai_discovery_cache_min_postings", "value": "15", "description": "Minimum cached postings before skipping OpenAI discovery"},
     {"key": "min_buyer_confidence_for_delivery", "value": "55", "description": "Minimum confidence for buyer-ready delivery"},
     {"key": "require_named_contact_for_delivery", "value": "true", "description": "Require a named contact for delivery"},
     {"key": "require_linkedin_for_delivery", "value": "true", "description": "Require LinkedIn proof for delivery"},
@@ -448,6 +454,7 @@ _SCHEMA_PATCHES: dict[str, dict[str, str]] = {
     },
     "job_postings": {
         "evidence_urls": "TEXT",
+        "role_family": "VARCHAR DEFAULT 'engineering'",
     },
     "contacts": {
         "source_urls": "TEXT",
@@ -456,10 +463,14 @@ _SCHEMA_PATCHES: dict[str, dict[str, str]] = {
         "generic_email_only": "BOOLEAN DEFAULT FALSE",
     },
     "leads": {
+        "role_focus": "VARCHAR DEFAULT 'engineering'",
         "buyer_ready": "BOOLEAN DEFAULT FALSE",
         "qa_status": "VARCHAR DEFAULT 'pending_review'",
         "proof_summary": "TEXT",
         "outreach_summary": "TEXT",
+    },
+    "pipeline_runs": {
+        "target_role_family": "VARCHAR DEFAULT 'engineering'",
     },
 }
 

@@ -34,6 +34,7 @@ from export.excel_generator import generate_excel
 from export.delivery_ledger import get_already_delivered_lead_ids, record_delivery
 from core.sse import publish_event
 from enrichment.fallback_emails import is_generic_role_email
+from core.roles import get_role_focus_label, normalize_role_focus, role_focus_matches
 
 logger = get_logger("pipeline.orchestrator")
 
@@ -50,12 +51,13 @@ def _as_utc(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-def _create_pipeline_run(run_type: str = "full") -> int:
+def _create_pipeline_run(run_type: str = "full", target_role_family: str = "engineering") -> int:
     """Create a new pipeline_run record. Returns run ID."""
     db = SessionLocal()
     try:
         run = PipelineRunRow(
             run_type=run_type,
+            target_role_family=target_role_family,
             started_at=datetime.now(timezone.utc),
             status="running",
         )
@@ -216,17 +218,17 @@ def _derive_qa_status(existing_status: str | None, buyer_ready: bool) -> str:
     return "pending_review" if buyer_ready else "needs_research"
 
 
-def _get_current_lead_row(db, company_id: int) -> LeadRow | None:
-    """Return the latest lead row for a company so runs update instead of duplicating."""
+def _get_current_lead_row(db, company_id: int, role_focus: str) -> LeadRow | None:
+    """Return the latest lead row for a company + role focus."""
     return (
         db.query(LeadRow)
-        .filter_by(company_id=company_id)
+        .filter_by(company_id=company_id, role_focus=role_focus)
         .order_by(LeadRow.updated_at.desc(), LeadRow.id.desc())
         .first()
     )
 
 
-def _score_all_leads(run_id: int) -> list[dict]:
+def _score_all_leads(run_id: int, role_focus: str) -> list[dict]:
     """Score all companies with contacts and create lead records."""
     db = SessionLocal()
     try:
@@ -246,12 +248,13 @@ def _score_all_leads(run_id: int) -> list[dict]:
                 .filter_by(company_id=company.id, is_active=True)
                 .all()
             )
+            postings = [posting for posting in postings if role_focus_matches(posting.role_family, role_focus)]
             role_count = len(postings)
 
             # Do not keep discovery-only companies in the shortlist. If an older
             # lead exists for a company that no longer has active postings, archive it.
             if role_count <= 0:
-                existing_lead = _get_current_lead_row(db, company.id)
+                existing_lead = _get_current_lead_row(db, company.id, role_focus)
                 if existing_lead and existing_lead.status != "archived":
                     existing_lead.status = "archived"
                     existing_lead.qa_status = "needs_research"
@@ -309,15 +312,16 @@ def _score_all_leads(run_id: int) -> list[dict]:
                 contact_title=contact.title if contact else None,
             )
 
-            # Reuse the latest company lead so the list stays one-row-per-company.
-            lead_row = _get_current_lead_row(db, company.id)
+            # Reuse the latest company lead for the selected role focus.
+            lead_row = _get_current_lead_row(db, company.id, role_focus)
             if lead_row is None:
-                lead_row = LeadRow(company_id=company.id, status="new")
+                lead_row = LeadRow(company_id=company.id, role_focus=role_focus, status="new")
                 db.add(lead_row)
 
             previous_status = lead_row.status
             previous_qa_status = lead_row.qa_status
             lead_row.contact_id = contact.id if contact else None
+            lead_row.role_focus = role_focus
             lead_row.hiring_intensity = hiring_score
             lead_row.hiring_label = hiring_label.value
             lead_row.data_confidence = data_confidence
@@ -347,6 +351,7 @@ def _score_all_leads(run_id: int) -> list[dict]:
                 "employee_count": company.employee_count or "",
                 "tech_stack": json.loads(company.tech_stack or "[]"),
                 "role_count": role_count,
+                "role_focus": role_focus,
                 "top_roles": top_roles,
                 "hiring_intensity": hiring_score,
                 "hiring_label": hiring_label.value,
@@ -402,7 +407,7 @@ def _score_all_leads(run_id: int) -> list[dict]:
         db.close()
 
 
-async def run_full_pipeline(target_market: str | None = None) -> dict:
+async def run_full_pipeline(target_market: str | None = None, role_focus: str | None = None) -> dict:
     """
     Execute the full 5-stage pipeline.
 
@@ -411,18 +416,23 @@ async def run_full_pipeline(target_market: str | None = None) -> dict:
     """
     if target_market is None:
         target_market = get_setting("default_target_market", "US tech companies")
+    selected_role_focus = normalize_role_focus(role_focus or get_setting("default_role_focus", "engineering"))
+    role_focus_label = get_role_focus_label(selected_role_focus)
 
-    run_id = _create_pipeline_run("full")
+    run_id = _create_pipeline_run("full", target_role_family=selected_role_focus)
     errors = []
 
-    logger.info("pipeline_start", run_id=run_id, target_market=target_market)
-    await publish_event("system", f"🚀 Started pipeline run #{run_id} for target market: '{target_market}'")
+    logger.info("pipeline_start", run_id=run_id, target_market=target_market, role_focus=selected_role_focus)
+    await publish_event(
+        "system",
+        f"🚀 Started pipeline run #{run_id} for target market: '{target_market}' with role focus: {role_focus_label}"
+    )
 
     try:
         # ── Stage 1: Discovery ──────────────────────────────────
         try:
-            await publish_event("discovery", "Starting company discovery across data sources...")
-            discovered = await run_discovery(target_market)
+            await publish_event("discovery", f"Starting company discovery across data sources for {role_focus_label} roles...")
+            discovered = await run_discovery(target_market, role_focus=selected_role_focus)
             _update_run(run_id, companies_discovered=discovered)
             logger.info("pipeline_discovery_done", discovered=discovered)
             await publish_event("discovery", f"✅ Found {discovered} new companies matching ICP.", level="success")
@@ -460,8 +470,8 @@ async def run_full_pipeline(target_market: str | None = None) -> dict:
 
         # ── Stage 4: Scoring ────────────────────────────────────
         try:
-            await publish_event("scoring", "Calculating hiring intensity and data confidence scores...")
-            leads_data = _score_all_leads(run_id)
+            await publish_event("scoring", f"Calculating hiring intensity and data confidence scores for {role_focus_label} roles...")
+            leads_data = _score_all_leads(run_id, selected_role_focus)
             _update_run(run_id, leads_generated=len(leads_data))
             logger.info("pipeline_scoring_done", leads=len(leads_data))
             await publish_event("scoring", f"✅ Scoring complete. Generated {len(leads_data)} qualified leads.", level="success")
@@ -565,6 +575,7 @@ async def run_full_pipeline(target_market: str | None = None) -> dict:
         return {
             "run_id": run_id,
             "status": status,
+            "role_focus": selected_role_focus,
             "companies_discovered": discovered if 'discovered' in dir() else 0,
             "companies_enriched": enriched if 'enriched' in dir() else 0,
             "companies_verified": verified,

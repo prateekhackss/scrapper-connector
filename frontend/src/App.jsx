@@ -39,6 +39,18 @@ const chartDefaults = {
   },
 }
 
+const ROLE_FOCUS_OPTIONS = [
+  ['engineering', 'Engineering'],
+  ['data', 'Data / AI'],
+  ['product', 'Product'],
+  ['design', 'Design'],
+  ['sales', 'Sales'],
+  ['marketing', 'Marketing'],
+  ['customer_success', 'Customer Success'],
+  ['leadership', 'Leadership'],
+  ['all', 'All Roles'],
+]
+
 // ── Hiring Label Badge ───────────────────────────────────────
 function HiringBadge({ label }) {
   const cls = {
@@ -230,6 +242,7 @@ function LeadsPage() {
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
+  const [roleFocus, setRoleFocus] = useState('engineering')
   const [priorityFilter, setPriorityFilter] = useState('')
   const [buyerReadyOnly, setBuyerReadyOnly] = useState(false)
   const [qaFilter, setQaFilter] = useState('')
@@ -240,7 +253,7 @@ function LeadsPage() {
 
   const fetchLeads = () => {
     setLoading(true)
-    const params = { page, per_page: 25, buyer_ready_only: buyerReadyOnly }
+    const params = { page, per_page: 25, buyer_ready_only: buyerReadyOnly, role_focus: roleFocus }
     if (search) params.search = search
     if (priorityFilter) params.priority_tier = priorityFilter
     if (qaFilter) params.qa_status = qaFilter
@@ -271,7 +284,7 @@ function LeadsPage() {
     fetchLeads()
   }
 
-  useEffect(() => { fetchLeads() }, [page, priorityFilter, buyerReadyOnly, qaFilter])
+  useEffect(() => { fetchLeads() }, [page, priorityFilter, buyerReadyOnly, qaFilter, roleFocus])
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
@@ -288,6 +301,22 @@ function LeadsPage() {
             onKeyDown={e => e.key === 'Enter' && fetchLeads()}
             style={{ width: 200 }}
           />
+        </div>
+        <div className="filter-group">
+          <span className="filter-label">Role Focus</span>
+          <select
+            className="select"
+            value={roleFocus}
+            onChange={e => {
+              setPage(1)
+              setRoleFocus(e.target.value)
+            }}
+            style={{ width: 170 }}
+          >
+            {ROLE_FOCUS_OPTIONS.map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
         </div>
         <div className="filter-group">
           <span className="filter-label">Priority</span>
@@ -690,6 +719,7 @@ function PipelinePage() {
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState(false)
   const [stopping, setStopping] = useState(false)
+  const [roleFocus, setRoleFocus] = useState('engineering')
   const [logs, setLogs] = useState([])
   const logEndRef = useRef(null)
 
@@ -744,9 +774,15 @@ function PipelinePage() {
 
   const startRun = async () => {
     setStarting(true)
-    setLogs([{ timestamp: new Date().toISOString(), stage: 'system', message: 'Initializing pipeline...', level: 'info' }])
+    const selectedRoleLabel = ROLE_FOCUS_OPTIONS.find(([value]) => value === roleFocus)?.[1] || 'Engineering'
+    setLogs([{
+      timestamp: new Date().toISOString(),
+      stage: 'system',
+      message: `Initializing pipeline for ${selectedRoleLabel} roles...`,
+      level: 'info',
+    }])
     try {
-      await api.startPipeline()
+      await api.startPipeline({ role_focus: roleFocus })
       const s = await api.getPipelineStatus()
       setStatus(s)
     } catch (e) {
@@ -785,6 +821,17 @@ function PipelinePage() {
           <p className="page-subtitle">Run and monitor the lead generation pipeline</p>
         </div>
         <div style={{ display: 'flex', gap: 12 }}>
+          <select
+            className="select"
+            value={roleFocus}
+            onChange={e => setRoleFocus(e.target.value)}
+            disabled={starting || stopping || status?.running}
+            style={{ minWidth: 180 }}
+          >
+            {ROLE_FOCUS_OPTIONS.map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
           {status?.running && status?.supports_background_jobs !== false && (
             <button
               className="btn btn-secondary"
@@ -878,6 +925,7 @@ function PipelinePage() {
               <tr>
                 <th>ID</th>
                 <th>Type</th>
+                <th>Focus</th>
                 <th>Status</th>
                 <th>Discovered</th>
                 <th>Leads</th>
@@ -893,6 +941,7 @@ function PipelinePage() {
                 <tr key={r.id}>
                   <td style={{ fontWeight: 600 }}>#{r.id}</td>
                   <td>{r.run_type}</td>
+                  <td>{ROLE_FOCUS_OPTIONS.find(([value]) => value === (r.target_role_family || 'engineering'))?.[1] || r.target_role_family || 'Engineering'}</td>
                   <td>
                     <span className={`badge ${
                       r.status === 'completed'
