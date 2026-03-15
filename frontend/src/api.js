@@ -42,6 +42,7 @@ export const getLeads = (params = {}) => {
 };
 export const getLeadStats = () => fetchJSON('/leads/stats');
 export const getLead = (id) => fetchJSON(`/leads/${id}`);
+export const getRunLeads = (runId) => fetchJSON(`/leads/run/${runId}`);
 export const updateLead = (id, data) =>
   fetchJSON(`/leads/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
 

@@ -91,6 +91,48 @@ def _reconcile_stale_serverless_runs(db) -> None:
         db.commit()
 
 
+def _reconcile_orphaned_runs(db) -> None:
+    """
+    Mark running rows as failed when the current process has no active task.
+
+    This handles crashes, restarts, or deploys that leave DB rows stuck in
+    `running` forever even though no in-memory pipeline task survived.
+    """
+    if _pipeline_running and _pipeline_task is not None and not _pipeline_task.done():
+        return
+
+    orphaned_runs = db.query(PipelineRunRow).filter(PipelineRunRow.status == "running").all()
+    if not orphaned_runs:
+        return
+
+    now = datetime.now(timezone.utc)
+    mutated = False
+    for run in orphaned_runs:
+        started_at = _as_utc(run.started_at) or now
+        existing_errors = []
+        try:
+            existing_errors = json.loads(run.errors or "[]")
+        except Exception:
+            existing_errors = []
+
+        message = (
+            "Run was marked failed because the backend no longer has an active pipeline task. "
+            "This usually means the worker restarted or the process crashed mid-run."
+        )
+        if message not in existing_errors:
+            existing_errors.append(message)
+
+        run.status = "failed"
+        run.completed_at = now
+        run.duration_seconds = max(0.0, (now - started_at).total_seconds())
+        run.errors = json.dumps(existing_errors)
+        run.error_count = len(existing_errors)
+        mutated = True
+
+    if mutated:
+        db.commit()
+
+
 @router.post("/start")
 async def start_pipeline(
     payload: StartPipelineRequest | None = None,
@@ -167,6 +209,7 @@ async def pipeline_status():
     db = SessionLocal()
     try:
         _reconcile_stale_serverless_runs(db)
+        _reconcile_orphaned_runs(db)
         latest = db.query(PipelineRunRow).order_by(PipelineRunRow.id.desc()).first()
         if not latest:
             return {
@@ -218,6 +261,7 @@ async def list_pipeline_runs(limit: int = 20):
     db = SessionLocal()
     try:
         _reconcile_stale_serverless_runs(db)
+        _reconcile_orphaned_runs(db)
         runs = (
             db.query(PipelineRunRow)
             .order_by(PipelineRunRow.id.desc())

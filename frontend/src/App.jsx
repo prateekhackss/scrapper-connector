@@ -720,6 +720,9 @@ function PipelinePage() {
   const [starting, setStarting] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [roleFocus, setRoleFocus] = useState('engineering')
+  const [selectedRunId, setSelectedRunId] = useState(null)
+  const [selectedRunLeads, setSelectedRunLeads] = useState([])
+  const [selectedRunLeadsLoading, setSelectedRunLeadsLoading] = useState(false)
   const [logs, setLogs] = useState([])
   const logEndRef = useRef(null)
 
@@ -811,6 +814,19 @@ function PipelinePage() {
       alert(e.message)
     }
     setStopping(false)
+  }
+
+  const loadRunLeads = async (runId) => {
+    setSelectedRunId(runId)
+    setSelectedRunLeadsLoading(true)
+    try {
+      const data = await api.getRunLeads(runId)
+      setSelectedRunLeads(data.leads || [])
+    } catch (e) {
+      alert(e.message)
+      setSelectedRunLeads([])
+    }
+    setSelectedRunLeadsLoading(false)
   }
 
   return (
@@ -956,7 +972,15 @@ function PipelinePage() {
                     </span>
                   </td>
                   <td>{r.companies_discovered}</td>
-                  <td>{r.leads_generated}</td>
+                  <td>
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => loadRunLeads(r.id)}
+                      style={{ padding: 0, minHeight: 'auto', color: 'var(--gold)' }}
+                    >
+                      {r.leads_generated}
+                    </button>
+                  </td>
                   <td>{r.leads_delivered}</td>
                   <td>${(r.openai_cost_usd || 0).toFixed(2)}</td>
                   <td style={{ color: r.error_count > 0 ? 'var(--error)' : 'var(--text-muted)' }}>{r.error_count}</td>
@@ -966,6 +990,70 @@ function PipelinePage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {selectedRunId && (
+        <div className="card" style={{ marginTop: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <div className="section-title" style={{ marginBottom: 0 }}>
+              <span className="gold-dot" />Run #{selectedRunId} Leads
+            </div>
+            <button className="btn btn-ghost" onClick={() => { setSelectedRunId(null); setSelectedRunLeads([]) }}>Close</button>
+          </div>
+
+          {selectedRunLeadsLoading ? (
+            <div className="loading-container"><div className="spinner" /></div>
+          ) : selectedRunLeads.length === 0 ? (
+            <div style={{ color: 'var(--text-muted)' }}>No lead snapshots were saved for this run.</div>
+          ) : (
+            <div style={{ overflow: 'auto' }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Company</th>
+                    <th>Roles</th>
+                    <th>Contact</th>
+                    <th>Confidence</th>
+                    <th>Priority</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedRunLeads.map((lead) => (
+                    <tr key={lead.id}>
+                      <td>
+                        <div style={{ fontWeight: 600 }}>{lead.company_name}</div>
+                        <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>{lead.company_domain}</div>
+                      </td>
+                      <td>
+                        <div style={{ fontWeight: 600 }}>{lead.role_count} roles</div>
+                        <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+                          {(lead.top_roles || []).slice(0, 2).join(' · ') || 'No role titles'}
+                        </div>
+                      </td>
+                      <td>
+                        {lead.contact_name ? (
+                          <>
+                            <div style={{ fontWeight: 500 }}>{lead.contact_name}</div>
+                            <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>{lead.contact_title}</div>
+                          </>
+                        ) : (
+                          <span style={{ color: 'var(--text-muted)' }}>No named contact</span>
+                        )}
+                      </td>
+                      <td>
+                        <ConfidenceBadge tier={lead.confidence_tier} />
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>{lead.data_confidence}/100</div>
+                      </td>
+                      <td><PriorityBadge tier={lead.priority_tier} /></td>
+                      <td><span className={`badge ${lead.status === 'delivered' ? 'badge-verified' : 'badge-cool'}`}>{lead.status}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </motion.div>

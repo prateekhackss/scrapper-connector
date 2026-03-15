@@ -32,6 +32,30 @@ def _age_in_days(dt):
     return max(0, int((now - current).total_seconds() // 86400))
 
 
+def _serialize_run_lead(lead, company, contact):
+    return {
+        "id": lead.id,
+        "company_name": company.company_name,
+        "company_domain": company.company_domain,
+        "role_focus": lead.role_focus,
+        "role_count": lead.role_count,
+        "top_roles": json.loads(lead.top_roles or "[]"),
+        "hiring_intensity": lead.hiring_intensity,
+        "hiring_label": lead.hiring_label,
+        "data_confidence": lead.data_confidence,
+        "confidence_tier": lead.confidence_tier,
+        "priority_tier": lead.priority_tier,
+        "contact_name": contact.full_name if contact else None,
+        "contact_title": contact.title if contact else None,
+        "best_email": contact.best_email if contact else None,
+        "buyer_ready": lead.buyer_ready,
+        "qa_status": lead.qa_status,
+        "proof_summary": lead.proof_summary,
+        "status": lead.status,
+        "created_at": lead.created_at.isoformat() if lead.created_at else None,
+    }
+
+
 @router.get("")
 async def list_leads(
     page: int = Query(1, ge=1),
@@ -307,5 +331,27 @@ async def update_lead(lead_id: int, data: LeadUpdateRequest):
 
         db.commit()
         return {"id": lead.id, "status": lead.status, "notes": lead.notes, "qa_status": lead.qa_status}
+    finally:
+        db.close()
+
+
+@router.get("/run/{run_id}")
+async def list_run_leads(run_id: int):
+    """List the exact lead snapshots produced by a specific pipeline run."""
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(LeadRow, CompanyRow, ContactRow)
+            .join(CompanyRow, LeadRow.company_id == CompanyRow.id)
+            .outerjoin(ContactRow, LeadRow.contact_id == ContactRow.id)
+            .filter(LeadRow.pipeline_run_id == run_id)
+            .order_by(LeadRow.hiring_intensity.desc(), LeadRow.data_confidence.desc(), LeadRow.id.desc())
+            .all()
+        )
+        return {
+            "run_id": run_id,
+            "total": len(rows),
+            "leads": [_serialize_run_lead(lead, company, contact) for lead, company, contact in rows],
+        }
     finally:
         db.close()

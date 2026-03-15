@@ -312,14 +312,13 @@ def _score_all_leads(run_id: int, role_focus: str) -> list[dict]:
                 contact_title=contact.title if contact else None,
             )
 
-            # Reuse the latest company lead for the selected role focus.
-            lead_row = _get_current_lead_row(db, company.id, role_focus)
-            if lead_row is None:
-                lead_row = LeadRow(company_id=company.id, role_focus=role_focus, status="new")
-                db.add(lead_row)
+            # Preserve a per-run snapshot while still carrying forward reviewer context.
+            previous_lead = _get_current_lead_row(db, company.id, role_focus)
+            previous_status = previous_lead.status if previous_lead else "new"
+            previous_qa_status = previous_lead.qa_status if previous_lead else None
+            lead_row = LeadRow(company_id=company.id, role_focus=role_focus, status="new")
+            db.add(lead_row)
 
-            previous_status = lead_row.status
-            previous_qa_status = lead_row.qa_status
             lead_row.contact_id = contact.id if contact else None
             lead_row.role_focus = role_focus
             lead_row.hiring_intensity = hiring_score
