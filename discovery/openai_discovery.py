@@ -60,6 +60,21 @@ If you cannot produce job_openings, include job_titles as a fallback.
 Return ONLY valid JSON. No markdown, no explanation. Just the JSON array."""
 
 
+def _extract_response_text(response: object) -> str:
+    """Extract text from OpenAI Responses API objects across SDK versions."""
+    output_text = getattr(response, "output_text", None)
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
+
+    chunks: list[str] = []
+    for item in getattr(response, "output", []) or []:
+        for block in getattr(item, "content", []) or []:
+            text = getattr(block, "text", None)
+            if isinstance(text, str) and text:
+                chunks.append(text)
+    return "".join(chunks).strip()
+
+
 def _build_user_prompt(market: str, role_focus: str | None = None, segment: str | None = None) -> str:
     """Build the user prompt for a discovery call."""
     focus_label = get_role_focus_label(role_focus)
@@ -99,15 +114,9 @@ async def _call_openai_discovery(
         duration_ms = int((time.time() - start) * 1000)
 
         # Extract text content from response
-        raw_text = ""
-        for item in response.output:
-            if hasattr(item, "content"):
-                for block in item.content:
-                    if hasattr(block, "text"):
-                        raw_text += block.text
+        raw_text = _extract_response_text(response)
 
         # Parse JSON from response
-        raw_text = raw_text.strip()
         if raw_text.startswith("```"):
             raw_text = raw_text.split("\n", 1)[1] if "\n" in raw_text else raw_text[3:]
             raw_text = raw_text.rsplit("```", 1)[0]

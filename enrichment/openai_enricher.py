@@ -62,6 +62,21 @@ If you cannot find anyone with confidence, return: {"found": false, "confidence_
 Return ONLY valid JSON. No markdown."""
 
 
+def _extract_response_text(response: object) -> str:
+    """Extract text from OpenAI Responses API objects across SDK versions."""
+    output_text = getattr(response, "output_text", None)
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
+
+    chunks: list[str] = []
+    for item in getattr(response, "output", []) or []:
+        for block in getattr(item, "content", []) or []:
+            text = getattr(block, "text", None)
+            if isinstance(text, str) and text:
+                chunks.append(text)
+    return "".join(chunks).strip()
+
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=2, min=2, max=30),
@@ -104,14 +119,8 @@ async def enrich_company_contact(
         duration_ms = int((time.time() - start) * 1000)
 
         # Extract text
-        raw_text = ""
-        for item in response.output:
-            if hasattr(item, "content"):
-                for block in item.content:
-                    if hasattr(block, "text"):
-                        raw_text += block.text
+        raw_text = _extract_response_text(response)
 
-        raw_text = raw_text.strip()
         if raw_text.startswith("```"):
             raw_text = raw_text.split("\n", 1)[1] if "\n" in raw_text else raw_text[3:]
             raw_text = raw_text.rsplit("```", 1)[0]
