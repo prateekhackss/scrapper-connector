@@ -228,6 +228,11 @@ def _get_current_lead_row(db, company_id: int, role_focus: str) -> LeadRow | Non
     )
 
 
+def _count_run_leads(db, run_id: int) -> int:
+    """Return the number of lead snapshots already stored for a run."""
+    return db.query(LeadRow).filter_by(pipeline_run_id=run_id).count()
+
+
 def _score_all_leads(run_id: int, role_focus: str) -> list[dict]:
     """Score all companies with contacts and create lead records."""
     db = SessionLocal()
@@ -584,6 +589,36 @@ async def run_full_pipeline(target_market: str | None = None, role_focus: str | 
         }
 
     except asyncio.CancelledError:
+        salvaged_lead_count = 0
+        try:
+            db = SessionLocal()
+            try:
+                salvaged_lead_count = _count_run_leads(db, run_id)
+            finally:
+                db.close()
+
+            if salvaged_lead_count == 0:
+                salvaged_leads = _score_all_leads(run_id, selected_role_focus)
+                salvaged_lead_count = len(salvaged_leads)
+                _update_run(run_id, leads_generated=salvaged_lead_count)
+                logger.info(
+                    "pipeline_cancelled_salvaged_leads",
+                    run_id=run_id,
+                    leads_generated=salvaged_lead_count,
+                )
+                if salvaged_lead_count:
+                    await publish_event(
+                        "scoring",
+                        f"Saved {salvaged_lead_count} partial lead snapshot(s) before cancellation.",
+                        level="warning",
+                    )
+        except Exception as salvage_error:
+            logger.error(
+                "pipeline_cancelled_salvage_failed",
+                run_id=run_id,
+                error=str(salvage_error),
+            )
+
         completed_at = datetime.now(timezone.utc)
         db = SessionLocal()
         try:
@@ -596,6 +631,8 @@ async def run_full_pipeline(target_market: str | None = None, role_focus: str | 
                 run.duration_seconds = max(0.0, (completed_at_utc - started_at).total_seconds())
                 run.errors = json.dumps(["Cancelled by user"])
                 run.error_count = 1
+                if salvaged_lead_count and not run.leads_generated:
+                    run.leads_generated = salvaged_lead_count
                 db.commit()
         finally:
             db.close()
