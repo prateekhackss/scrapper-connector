@@ -223,6 +223,18 @@ async def run_discovery(
 
     # ── Deduplicate ─────────────────────────────────────────────
     unique_companies = deduplicate_companies(all_companies)
+
+    # Only keep companies that have at least one posting we can map back.
+    posting_domains = {
+        posting_domain
+        for posting in all_postings
+        for posting_domain in [_infer_posting_domain(posting)]
+        if posting_domain
+    }
+    unique_companies = [
+        company for company in unique_companies
+        if normalize_domain(company.company_domain) in posting_domains
+    ]
     logger.info("discovery_dedup_done", before=len(all_companies), after=len(unique_companies))
 
     # ── Persist to DB ───────────────────────────────────────────

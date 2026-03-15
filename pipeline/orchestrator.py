@@ -248,6 +248,20 @@ def _score_all_leads(run_id: int) -> list[dict]:
             )
             role_count = len(postings)
 
+            # Do not keep discovery-only companies in the shortlist. If an older
+            # lead exists for a company that no longer has active postings, archive it.
+            if role_count <= 0:
+                existing_lead = _get_current_lead_row(db, company.id)
+                if existing_lead and existing_lead.status != "archived":
+                    existing_lead.status = "archived"
+                    existing_lead.qa_status = "needs_research"
+                    existing_lead.proof_summary = (
+                        "No active role postings are currently attached to this company. "
+                        "Lead archived until fresh hiring evidence is found."
+                    )
+                    existing_lead.outreach_summary = ""
+                continue
+
             # Seniority mix
             seniority_mix = {}
             for p in postings:
