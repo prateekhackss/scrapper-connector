@@ -33,6 +33,7 @@ export const stopPipeline = () =>
 
 export const getPipelineStatus = () => fetchJSON('/pipeline/status');
 export const getPipelineRuns = (limit = 20) => fetchJSON(`/pipeline/runs?limit=${limit}`);
+export const getRunPreview = (runId) => fetchJSON(`/pipeline/runs/${runId}/preview`);
 export const getPipelineStream = () => new EventSource(BASE + '/pipeline/stream');
 
 // ── Leads ───────────────────────────────────────────────────

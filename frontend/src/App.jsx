@@ -721,8 +721,9 @@ function PipelinePage() {
   const [stopping, setStopping] = useState(false)
   const [roleFocus, setRoleFocus] = useState('engineering')
   const [selectedRunId, setSelectedRunId] = useState(null)
-  const [selectedRunLeads, setSelectedRunLeads] = useState([])
-  const [selectedRunLeadsLoading, setSelectedRunLeadsLoading] = useState(false)
+  const [selectedRunPreview, setSelectedRunPreview] = useState(null)
+  const [selectedRunPreviewLoading, setSelectedRunPreviewLoading] = useState(false)
+  const [selectedRunPanel, setSelectedRunPanel] = useState('discovered')
   const [logs, setLogs] = useState([])
   const logEndRef = useRef(null)
 
@@ -734,6 +735,17 @@ function PipelinePage() {
   }
 
   useEffect(() => { fetchState() }, [])
+
+  useEffect(() => {
+    if (!status?.running) return undefined
+    const interval = setInterval(() => {
+      fetchState()
+      if (selectedRunId) {
+        loadRunPreview(selectedRunId, selectedRunPanel, false)
+      }
+    }, 10000)
+    return () => clearInterval(interval)
+  }, [status?.running, selectedRunId, selectedRunPanel])
 
   // Auto-scroll logs
   useEffect(() => {
@@ -768,13 +780,6 @@ function PipelinePage() {
     return () => { if (es) es.close(); };
   }, [status?.running]);
 
-  useEffect(() => {
-    Promise.all([
-      api.getPipelineStatus().catch(() => null),
-      api.getPipelineRuns().catch(() => []),
-    ]).then(([s, r]) => { setStatus(s); setRuns(r); setLoading(false) })
-  }, [])
-
   const startRun = async () => {
     setStarting(true)
     const selectedRoleLabel = ROLE_FOCUS_OPTIONS.find(([value]) => value === roleFocus)?.[1] || 'Engineering'
@@ -788,6 +793,8 @@ function PipelinePage() {
       await api.startPipeline({ role_focus: roleFocus })
       const s = await api.getPipelineStatus()
       setStatus(s)
+      setSelectedRunId(null)
+      setSelectedRunPreview(null)
     } catch (e) {
       alert(e.message)
       setLogs([])
@@ -816,17 +823,18 @@ function PipelinePage() {
     setStopping(false)
   }
 
-  const loadRunLeads = async (runId) => {
+  const loadRunPreview = async (runId, panel = 'discovered', showSpinner = true) => {
     setSelectedRunId(runId)
-    setSelectedRunLeadsLoading(true)
+    setSelectedRunPanel(panel)
+    if (showSpinner) setSelectedRunPreviewLoading(true)
     try {
-      const data = await api.getRunLeads(runId)
-      setSelectedRunLeads(data.leads || [])
+      const data = await api.getRunPreview(runId)
+      setSelectedRunPreview(data)
     } catch (e) {
-      alert(e.message)
-      setSelectedRunLeads([])
+      if (showSpinner) alert(e.message)
+      setSelectedRunPreview(null)
     }
-    setSelectedRunLeadsLoading(false)
+    if (showSpinner) setSelectedRunPreviewLoading(false)
   }
 
   return (
@@ -971,11 +979,19 @@ function PipelinePage() {
                       {r.status}
                     </span>
                   </td>
-                  <td>{r.companies_discovered}</td>
                   <td>
                     <button
                       className="btn btn-ghost"
-                      onClick={() => loadRunLeads(r.id)}
+                      onClick={() => loadRunPreview(r.id, 'discovered')}
+                      style={{ padding: 0, minHeight: 'auto', color: 'var(--gold)' }}
+                    >
+                      {r.companies_discovered}
+                    </button>
+                  </td>
+                  <td>
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => loadRunPreview(r.id, 'leads')}
                       style={{ padding: 0, minHeight: 'auto', color: 'var(--gold)' }}
                     >
                       {r.leads_generated}
@@ -997,16 +1013,92 @@ function PipelinePage() {
         <div className="card" style={{ marginTop: 20 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
             <div className="section-title" style={{ marginBottom: 0 }}>
-              <span className="gold-dot" />Run #{selectedRunId} Leads
+              <span className="gold-dot" />Run #{selectedRunId} Preview
             </div>
-            <button className="btn btn-ghost" onClick={() => { setSelectedRunId(null); setSelectedRunLeads([]) }}>Close</button>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button className="btn btn-ghost" onClick={() => loadRunPreview(selectedRunId, selectedRunPanel)}>
+                <RefreshCcw size={14} /> Refresh
+              </button>
+              <button className="btn btn-ghost" onClick={() => { setSelectedRunId(null); setSelectedRunPreview(null) }}>Close</button>
+            </div>
           </div>
 
-          {selectedRunLeadsLoading ? (
+          {selectedRunPreview && (
+            <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+              <button
+                className={`btn ${selectedRunPanel === 'discovered' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setSelectedRunPanel('discovered')}
+              >
+                Discovered Companies ({selectedRunPreview.discovered_total || 0})
+              </button>
+              <button
+                className={`btn ${selectedRunPanel === 'leads' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setSelectedRunPanel('leads')}
+              >
+                Lead Snapshots ({selectedRunPreview.leads_total || 0})
+              </button>
+              {selectedRunPreview.run?.status === 'running' && (
+                <span className="badge badge-cool" style={{ alignSelf: 'center' }}>AUTO REFRESHING</span>
+              )}
+            </div>
+          )}
+
+          {selectedRunPreviewLoading ? (
             <div className="loading-container"><div className="spinner" /></div>
-          ) : selectedRunLeads.length === 0 ? (
-            <div style={{ color: 'var(--text-muted)' }}>No lead snapshots were saved for this run.</div>
+          ) : !selectedRunPreview ? (
+            <div style={{ color: 'var(--text-muted)' }}>No preview data is available for this run yet.</div>
+          ) : selectedRunPanel === 'discovered' ? (
+            (selectedRunPreview.discovered_companies || []).length === 0 ? (
+              <div style={{ color: 'var(--text-muted)' }}>No discovered companies are available for this run yet.</div>
+            ) : (
+              <div style={{ overflow: 'auto' }}>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Company</th>
+                      <th>Roles Seen</th>
+                      <th>Contact</th>
+                      <th>Sources</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedRunPreview.discovered_companies.map((company) => (
+                      <tr key={company.company_id}>
+                        <td>
+                          <div style={{ fontWeight: 600 }}>{company.company_name}</div>
+                          <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>{company.company_domain}</div>
+                        </td>
+                        <td>
+                          <div style={{ fontWeight: 600 }}>{company.role_count} roles</div>
+                          <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+                            {(company.top_roles || []).slice(0, 2).join(' · ') || 'No role titles'}
+                          </div>
+                        </td>
+                        <td>
+                          {company.contact_name ? (
+                            <>
+                              <div style={{ fontWeight: 500 }}>{company.contact_name}</div>
+                              <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>{company.contact_title}</div>
+                            </>
+                          ) : (
+                            <span style={{ color: 'var(--text-muted)' }}>No named contact yet</span>
+                          )}
+                        </td>
+                        <td>
+                          <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
+                            {(company.sources || []).join(' · ') || 'Unknown source'}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
           ) : (
+            (selectedRunPreview.leads || []).length === 0 ? (
+              <div style={{ color: 'var(--text-muted)' }}>No lead snapshots were saved for this run yet.</div>
+            ) : (
             <div style={{ overflow: 'auto' }}>
               <table className="data-table">
                 <thead>
@@ -1020,7 +1112,7 @@ function PipelinePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {selectedRunLeads.map((lead) => (
+                  {selectedRunPreview.leads.map((lead) => (
                     <tr key={lead.id}>
                       <td>
                         <div style={{ fontWeight: 600 }}>{lead.company_name}</div>
@@ -1053,6 +1145,7 @@ function PipelinePage() {
                 </tbody>
               </table>
             </div>
+            )
           )}
         </div>
       )}

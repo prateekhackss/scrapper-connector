@@ -15,10 +15,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from core.config import IS_VERCEL
-from core.database import SessionLocal, PipelineRunRow
+from core.database import SessionLocal, PipelineRunRow, CompanyRow, ContactRow, JobPostingRow, LeadRow
 from core.logger import get_logger
 from core.sse import event_generator, publish_event
 from pipeline.orchestrator import run_full_pipeline
+from core.roles import get_role_focus_label
 
 logger = get_logger("api.pipeline")
 router = APIRouter()
@@ -131,6 +132,15 @@ def _reconcile_orphaned_runs(db) -> None:
 
     if mutated:
         db.commit()
+
+
+def _run_window(run: PipelineRunRow) -> tuple[datetime, datetime]:
+    """Return a safe time window for reconstructing run activity."""
+    started_at = _as_utc(run.started_at) or datetime.now(timezone.utc)
+    ended_at = _as_utc(run.completed_at) or datetime.now(timezone.utc)
+    if ended_at < started_at:
+        ended_at = started_at
+    return started_at, ended_at
 
 
 @router.post("/start")
@@ -285,5 +295,130 @@ async def list_pipeline_runs(limit: int = 20):
             }
             for r in runs
         ]
+    finally:
+        db.close()
+
+
+@router.get("/runs/{run_id}/preview")
+async def get_run_preview(run_id: int):
+    """Return discovered companies and saved lead snapshots for a specific run."""
+    db = SessionLocal()
+    try:
+        _reconcile_stale_serverless_runs(db)
+        _reconcile_orphaned_runs(db)
+
+        run = db.query(PipelineRunRow).filter_by(id=run_id).first()
+        if not run:
+            raise HTTPException(status_code=404, detail="Pipeline run not found")
+
+        started_at, ended_at = _run_window(run)
+        role_focus = run.target_role_family or "engineering"
+
+        lead_rows = (
+            db.query(LeadRow, CompanyRow, ContactRow)
+            .join(CompanyRow, LeadRow.company_id == CompanyRow.id)
+            .outerjoin(ContactRow, LeadRow.contact_id == ContactRow.id)
+            .filter(LeadRow.pipeline_run_id == run_id)
+            .order_by(LeadRow.hiring_intensity.desc(), LeadRow.data_confidence.desc(), LeadRow.id.desc())
+            .all()
+        )
+
+        recent_postings = (
+            db.query(JobPostingRow, CompanyRow)
+            .join(CompanyRow, JobPostingRow.company_id == CompanyRow.id)
+            .filter(
+                JobPostingRow.is_active == True,
+                JobPostingRow.last_scraped >= started_at,
+                JobPostingRow.last_scraped <= ended_at,
+            )
+            .order_by(JobPostingRow.last_scraped.desc(), JobPostingRow.id.desc())
+            .all()
+        )
+
+        discovered_map: dict[int, dict] = {}
+        for posting, company in recent_postings:
+            if role_focus != "all" and posting.role_family != role_focus:
+                continue
+
+            item = discovered_map.setdefault(company.id, {
+                "company_id": company.id,
+                "company_name": company.company_name,
+                "company_domain": company.company_domain,
+                "website_url": company.website_url,
+                "industry": company.industry,
+                "headquarters": company.headquarters,
+                "times_seen": company.times_seen,
+                "last_seen_at": company.last_seen_at.isoformat() if company.last_seen_at else None,
+                "role_focus": role_focus,
+                "role_count": 0,
+                "top_roles": [],
+                "sources": [],
+                "source_urls": [],
+            })
+
+            item["role_count"] += 1
+            if posting.job_title and posting.job_title not in item["top_roles"] and len(item["top_roles"]) < 5:
+                item["top_roles"].append(posting.job_title)
+
+            if posting.source and posting.source not in item["sources"]:
+                item["sources"].append(posting.source)
+
+            if posting.job_url and posting.job_url not in item["source_urls"] and len(item["source_urls"]) < 8:
+                item["source_urls"].append(posting.job_url)
+
+        current_contacts = {
+            contact.company_id: contact
+            for contact in db.query(ContactRow)
+            .filter(ContactRow.company_id.in_(list(discovered_map.keys())), ContactRow.is_current == True)
+            .all()
+        } if discovered_map else {}
+
+        for company_id, item in discovered_map.items():
+            contact = current_contacts.get(company_id)
+            item["contact_name"] = contact.full_name if contact else None
+            item["contact_title"] = contact.title if contact else None
+            item["best_email"] = contact.best_email if contact else None
+
+        return {
+            "run": {
+                "id": run.id,
+                "status": run.status,
+                "target_role_family": role_focus,
+                "target_role_label": get_role_focus_label(role_focus),
+                "started_at": run.started_at.isoformat() if run.started_at else None,
+                "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+                "companies_discovered": run.companies_discovered,
+                "leads_generated": run.leads_generated,
+            },
+            "discovered_total": len(discovered_map),
+            "leads_total": len(lead_rows),
+            "discovered_companies": sorted(
+                discovered_map.values(),
+                key=lambda row: (-row["role_count"], row["company_name"].lower()),
+            ),
+            "leads": [
+                {
+                    "id": lead.id,
+                    "company_name": company.company_name,
+                    "company_domain": company.company_domain,
+                    "role_focus": lead.role_focus,
+                    "role_count": lead.role_count,
+                    "top_roles": json.loads(lead.top_roles or "[]"),
+                    "hiring_intensity": lead.hiring_intensity,
+                    "hiring_label": lead.hiring_label,
+                    "data_confidence": lead.data_confidence,
+                    "confidence_tier": lead.confidence_tier,
+                    "priority_tier": lead.priority_tier,
+                    "contact_name": contact.full_name if contact else None,
+                    "contact_title": contact.title if contact else None,
+                    "buyer_ready": lead.buyer_ready,
+                    "qa_status": lead.qa_status,
+                    "proof_summary": lead.proof_summary,
+                    "status": lead.status,
+                    "created_at": lead.created_at.isoformat() if lead.created_at else None,
+                }
+                for lead, company, contact in lead_rows
+            ],
+        }
     finally:
         db.close()
